@@ -14,6 +14,8 @@ A single-page controller for the TangibleFuture LOOI desk robot. It talks straig
 - **Training wheels**: records your joystick driving, learns your style and drives like you
 - **AI pilot**: an OpenAI model with tool calls, gated by a safety layer, and it can see through the camera
 - **Eyes**: rear-camera free-floor detection that steers Explore (it only triggers avoidance within the *Camera reacts within* distance, 300 mm by default), a head-tilt "second look" when camera and distance disagree, and a full-screen face for the Flip's cover screen
+- **Sensor fusion**: the camera learns to judge distance from the distance sensor (per head tilt), giving each of 9 columns a distance estimate; the distance sensor overrides the centre and the close-range sensor confirms contact
+- **Map & home**: dead-reckoned position from every drive command, a live radar with obstacle points, the last 5 minutes of path, Set home / Go home
 - **Remote console**: live camera with vision overlay, telemetry, joystick, Explore, AI chat and settings from a PC browser. Rotate or mirror the video to match how the phone sits. Remote driving keeps a 300 ms deadman (if the PC goes quiet, it stops). The forward block and edge stop can be switched off with **Safety off** on the PC; they come back on when the PC disconnects
 
 ## Run on the phone (Galaxy Z Flip 4 on LOOI)
@@ -31,6 +33,12 @@ Tip: LOOI charges the phone wirelessly, so *Developer options → Stay awake* ke
 ### How the remote link works
 WebRTC between the phone and the PC via [PeerJS](https://peerjs.com). The free PeerJS cloud server only introduces the two devices, then video and commands go directly between them. It works best with both on the same Wi-Fi.
 To use your own signalling server, add `?peerhost=HOST&peerport=PORT&peersecure=0|1` to both URLs.
+
+### Calibration (do once, in this order)
+1. **360° time**: Test 360° spin, adjust until LOOI ends where it started.
+2. **Speed**: Speed test (1 s at speed 100), measure the distance in mm, enter it as *mm/s at speed 100*.
+3. **Camera rotation**: rotate the view on the PC until it's upright. The phone uses the same setting to analyse the image.
+4. **Camera ranging** learns by itself while driving toward things the distance sensor can see.
 
 ## Protocol (service `0x00FF`)
 | What | Where | Format |

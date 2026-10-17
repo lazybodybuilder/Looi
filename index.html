@@ -309,6 +309,9 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
           <label>Blocked when free floor below (%)<input type="number" id="vis-block" value="30" min="5" max="80" step="5"></label>
           <label>Floor match tolerance<input type="number" id="vis-tol" value="0.09" min="0.02" max="0.3" step="0.01"></label>
           <label>Camera field of view (°)<input type="number" id="vis-fov" value="70" min="40" max="130" step="5"></label>
+          <label>Camera rotation<select id="vis-rot"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+          <label class="toggle"><input type="checkbox" id="vis-mirror"> Mirror camera</label>
+          <label>Drive speed: mm/s at speed 100<input type="number" id="nav-speed" value="200" min="30" max="1000" step="10"></label>
         </div>
         <div class="row">
           <label class="toggle"><input type="checkbox" id="vis-steer" checked> Steer Explore with the camera</label>
@@ -419,6 +422,27 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
         </dl>
       </div>
     </div>
+  </section>
+
+  <section class="panel" id="nav-panel">
+    <div class="row" style="justify-content: space-between;">
+      <h2>Position, path &amp; home</h2>
+    </div>
+    <dl class="kv">
+      <dt>Position</dt><dd id="nav-pos">—</dd>
+      <dt>Home</dt><dd id="nav-home">not set</dd>
+      <dt>Path</dt><dd id="nav-rec">recording</dd>
+      <dt>Camera ranging</dt><dd id="nav-cal">learning…</dd>
+    </dl>
+    <div class="row">
+      <button id="nav-home-set">Set home here</button>
+      <button class="primary" id="nav-home-go">Go home</button>
+      <button id="nav-rec-btn">Pause / resume path</button>
+      <button id="nav-reset">Reset position</button>
+      <button id="nav-speedtest">Speed test: 1 s at 100</button>
+      <button id="range-reset">Reset camera ranging</button>
+    </div>
+    <p class="hint">Position is estimated from the drive commands (there are no wheel sensors), so it drifts over time. Calibrate it first: run the speed test, measure how far LOOI moved in mm, and enter that as "mm/s at speed 100" in the Eyes panel. Camera ranging learns by itself whenever the distance sensor sees something; drive toward a few objects to teach it.</p>
   </section>
 
   <section class="panel ai" id="ai-panel">
@@ -535,6 +559,7 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
   function write(key, bytes, { response = true, quiet = false } = {}) {
     const c = chars.get(key);
     if (!c) return Promise.reject(new Error(`Characteristic ${key.toUpperCase()} not found on this robot`));
+    if (key === "fed0" && bytes.length === 2) odoCommand(bytes); // every drive command feeds dead reckoning
     const job = writeChain.then(async () => {
       if (!quiet) log("tx", `→ ${key.toUpperCase()}  ${toHex(bytes)}${response ? "" : "  (no resp)"}`);
       if (!response && c.properties.writeWithoutResponse && c.writeValueWithoutResponse) await c.writeValueWithoutResponse(bytes);
@@ -1177,7 +1202,7 @@ You control a real robot on a real desk. Rules:
     }
     if (state === "cruise") EX.leg = { h0: EX.heading, t: Date.now() };
     EX.state = state; EX.t0 = Date.now(); EX.data = data;
-    $("ex-state").textContent = { cruise: EX.mode === "imitate" ? "Cruising your way" : "Cruising", maneuver: "Avoiding, your style", peek: "Taking a second look", scan: "Scanning 360°", turnto: "Turning to open space", backup: "Backing away from edge", escape: "Turning away from edge", lifted: "Picked up — waiting", pause: "Pausing" }[state] || state;
+    $("ex-state").textContent = { cruise: EX.mode === "imitate" ? "Cruising your way" : EX.mode === "home" ? "Heading home" : "Cruising", maneuver: "Avoiding, your style", peek: "Taking a second look", scan: "Scanning 360°", turnto: "Turning to open space", backup: "Backing away from edge", escape: "Turning away from edge", lifted: "Picked up — waiting", pause: "Pausing" }[state] || state;
     if (state === "scan") { EX.samples = []; EX.data.dir = Math.random() < 0.5 ? 1 : -1; EX.data.h0 = EX.heading; EX.scans++; }
     $("ex-counts").textContent = `${EX.scans} · ${EX.edgeCount}`;
   }
@@ -1208,6 +1233,10 @@ You control a real robot on a real desk. Rules:
       for (const leg of EX.legs) if (Math.abs(angDiff(a, leg.heading)) < 35) f *= 0.65; // been that way recently
       const last = EX.legs[EX.legs.length - 1];
       if (last && Math.abs(angDiff(a, last.heading + 180)) < 40) f *= 0.5; // the way we just came from
+      if (EX.mode === "home" && ODO.home) { // prefer openings that point home
+        const bearing = (Math.atan2(ODO.home.y - ODO.y, ODO.home.x - ODO.x) * 180) / Math.PI;
+        f *= 0.5 + (1 + Math.cos((angDiff(a, bearing) * Math.PI) / 180)) / 2;
+      }
       return f;
     };
     let best = -1, bestD = -1, rawBest = -1, rawD = -1;
@@ -1289,7 +1318,10 @@ You control a real robot on a real desk. Rules:
           // while the camera sees the floor almost completely covered. Otherwise it just leans away.
           const reactMm = exNum("#ex-react", 300), dNow = effDist();
           const camNear = dNow < reactMm || (dNow >= OPEN && VIS.center < blk * 0.5);
-          if (VIS.center < blk && camNear && now > (EX.visIgnoreUntil || 0)) {
+          // Once the camera has learned distances from the distance sensor, use the fused per-column estimate instead.
+          const fcols = fusedCols(), fFront = fcols ? Math.min(fcols[3], fcols[4], fcols[5]) : null;
+          const camBlocked = fcols ? fFront < reactMm : VIS.center < blk && camNear;
+          if (camBlocked && now > (EX.visIgnoreUntil || 0)) {
             EX.visBlockSince ||= now;
             // Camera says blocked but the distance sensor sees room: tilt the head for a second look before reacting.
             if (now - EX.visBlockSince > 200 && $("ex-peek").checked && dNow >= OPEN && now > (EX.peekCooldown || 0)) {
@@ -1300,10 +1332,11 @@ You control a real robot on a real desk. Rules:
             if (now - EX.visBlockSince > 200) {
               EX.visBlockSince = 0;
               if (P) { exEvent("camera sees something ahead — avoiding your way"); return exEnter("maneuver", planManeuver(P)); }
-              const open = VIS.cols[VIS.bestCol];
-              if (open > blk + 0.15 && VIS.bestCol !== 4) {
-                const deg = Math.abs(4 - VIS.bestCol) / 4 * visNum("vis-fov", 70) / 2 + 15;
-                const dir = VIS.steer > 0 ? 1 : -1;
+              let bestCol = VIS.bestCol, open = VIS.cols[VIS.bestCol] > blk + 0.15;
+              if (fcols) { bestCol = fcols.indexOf(Math.max(...fcols)); open = fcols[bestCol] > reactMm + 150; }
+              if (open && bestCol !== 4) {
+                const deg = Math.abs(4 - bestCol) / 4 * visNum("vis-fov", 70) / 2 + 15;
+                const dir = bestCol < 4 ? 1 : -1;
                 await exSend(0, 0);
                 exEvent(`camera sees something ahead — turning ${Math.round(deg)}° ${dir > 0 ? "left" : "right"} toward open floor`);
                 return exEnter("turnto", { dir, ms: (deg / 360) * spin });
@@ -1315,6 +1348,14 @@ You control a real robot on a real desk. Rules:
           turn = EX.wander * 0.4 + VIS.steer * (12 + 25 * (1 - Math.min(1, VIS.center / 0.7)));
           slow *= Math.max(0.5, Math.min(1, VIS.center / 0.6));
           slow = Math.max(20, slow);
+        }
+        if (EX.mode === "home" && ODO.home) {
+          const dx = ODO.home.x - ODO.x, dy = ODO.home.y - ODO.y, dh = Math.hypot(dx, dy);
+          if (dh < 120) { await exSend(0, 0); exEvent("home reached"); return stopExplore("home reached"); }
+          const err = angDiff((Math.atan2(dy, dx) * 180) / Math.PI, ODO.th);
+          if (Math.abs(err) > 50) return exSend(0, Math.sign(err) * turnSp * 0.8); // face home first
+          turn = Math.max(-35, Math.min(35, err * 1.2)) + turn * 0.2;
+          slow = Math.min(slow, Math.max(22, dh / 4));
         }
         return exSend(slow, turn);
       }
@@ -1408,14 +1449,15 @@ You control a real robot on a real desk. Rules:
   function startExplore(mode = "explore") {
     if (!device?.gatt?.connected || EX.running) return;
     if (mode === "imitate" && !TR.profile) { trStatus("Learn your style first: record some driving, then press Learn my style."); return; }
+    if (mode === "home" && !ODO.home) { log("err", "Set a home position first."); return; }
     if (TR.recording) toggleRecording();
-    EX.mode = mode; EX.heading = 0; EX.lastSendAt = 0; EX.lastTurn = 0; EX.legs = []; EX.leg = null; renderHistory();
+    EX.mode = mode; EX.heading = ODO.th; EX.lastSendAt = 0; EX.lastTurn = 0; EX.legs = []; EX.leg = null; renderHistory();
     if (driving) haltDrive(true);
     if (AI.autoTimer) stopAuto("explore mode started");
     EX.running = true; EX.scans = 0; EX.edgeCount = 0; EX.edges = []; EX.lastLight = null; EX.bins = null; EX.best = -1;
     EX.endAt = Date.now() + exNum("#ex-mins", 10) * 60000;
     $("ex-start").disabled = true; $("ex-stop").disabled = false; $("ex-cal").disabled = true;
-    chip("st-explore", mode === "imitate" ? "Driving like you" : "Exploring", "ok");
+    chip("st-explore", mode === "imitate" ? "Driving like you" : mode === "home" ? "Going home" : "Exploring", "ok");
     $("tr-run").disabled = true;
     exEvent(mode === "imitate" ? "started driving in your style" : "started");
     EX.peekCooldown = 0; EX.visIgnoreUntil = 0;
@@ -1678,11 +1720,38 @@ You control a real robot on a real desk. Rules:
   $("cam-select").addEventListener("change", () => { if (VIS.running) startCamera(); });
 
   // Free-floor analysis on a 96×72 thumbnail.
+  // Draw the camera frame the right way up: the folded phone can sit sideways or upside down on LOOI.
+  function drawUpright(ctx, v, W, H) {
+    const rot = Number($("vis-rot").value) || 0, side = rot % 180 !== 0;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.translate(W / 2, H / 2);
+    ctx.rotate((rot * Math.PI) / 180);
+    if ($("vis-mirror").checked) ctx.scale(-1, 1);
+    const dw = side ? H : W, dh = side ? W : H;
+    ctx.drawImage(v, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+  }
+  function applyPreviewRotation() {
+    const rot = Number($("vis-rot").value) || 0;
+    $("cam-video").style.transform = `rotate(${rot}deg) scaleX(${$("vis-mirror").checked ? -1 : 1})`;
+  }
+  ["vis-block", "vis-tol", "vis-fov", "vis-rot", "nav-speed"].forEach((id) => {
+    try { const v = localStorage.getItem("looi-" + id); if (v != null) $(id).value = v; } catch {}
+    $(id).addEventListener("change", () => { try { localStorage.setItem("looi-" + id, $(id).value); } catch {} applyPreviewRotation(); VIS.ref = null; });
+  });
+  try { $("vis-mirror").checked = localStorage.getItem("looi-vis-mirror") === "1"; } catch {}
+  $("vis-mirror").addEventListener("change", () => { try { localStorage.setItem("looi-vis-mirror", $("vis-mirror").checked ? "1" : "0"); } catch {} applyPreviewRotation(); VIS.ref = null; });
+  applyPreviewRotation();
+
   function analyseFrame() {
     const v = $("cam-video");
     if (!v.videoWidth) return;
+    const side = (Number($("vis-rot").value) || 0) % 180 !== 0;
+    const tw = side ? 72 : 96, th = side ? 96 : 72;
+    if (visWork.width !== tw || visWork.height !== th) { visWork.width = tw; visWork.height = th; }
     const W = visWork.width, H = visWork.height;
-    visCtx.drawImage(v, 0, 0, W, H);
+    drawUpright(visCtx, v, W, H);
     const px = visCtx.getImageData(0, 0, W, H).data;
     const feat = (i) => { const r = px[i], g = px[i + 1], b = px[i + 2], s = r + g + b + 1; return [r / s, g / s, s / 765]; };
     // Floor reference: bottom-centre patch, smoothed over time. Only update when the distance sensor agrees it's clear.
@@ -1712,6 +1781,7 @@ You control a real robot on a real desk. Rules:
     VIS.center = (sm[3] + sm[4] * 2 + sm[5]) / 4;
     VIS.steer = (4 - best) / 4; // +1 = open space on the left (positive turn = left)
     VIS.at = Date.now();
+    learnRange();
     VIS.frames++;
     if (Date.now() - VIS.fpsAt > 1000) { VIS.fps = VIS.frames; VIS.frames = 0; VIS.fpsAt = Date.now(); $("vis-fps").textContent = `${VIS.fps} frames/s`; }
     drawOverlay();
@@ -1744,8 +1814,10 @@ You control a real robot on a real desk. Rules:
     const v = $("cam-video");
     if (!VIS.running || !v.videoWidth) return null;
     const c = document.createElement("canvas"), sc = 512 / Math.max(v.videoWidth, v.videoHeight);
-    c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
-    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    const side = (Number($("vis-rot").value) || 0) % 180 !== 0;
+    const w = Math.round(v.videoWidth * sc), h = Math.round(v.videoHeight * sc);
+    c.width = side ? h : w; c.height = side ? w : h;
+    drawUpright(c.getContext("2d"), v, c.width, c.height);
     return c.toDataURL("image/jpeg", 0.7);
   }
   function visionSummary() {
@@ -1823,13 +1895,158 @@ You control a real robot on a real desk. Rules:
   }
 
   // ===================================================================
+  // ---- Sensor fusion: teach the camera to judge distance ----
+  //   The camera alone only knows "how much floor do I see" per column. Every time the distance sensor
+  //   has a solid reading, we pair it with how much floor the centre columns showed, building a lookup
+  //   (per head-tilt, because tilting changes the view). With that table each camera column gets an
+  //   estimated distance, the centre is overridden by the real distance sensor, and the close-range
+  //   sensor confirms anything right against the nose.
+  // ===================================================================
+  const RANGE = { tables: {} };
+  try { RANGE.tables = JSON.parse(localStorage.getItem("looi-range") || "{}") || {}; } catch {}
+  let rangeSaveAt = 0;
+  const headKey = () => String(Math.round((S.head ?? 135) / 20) * 20);
+  function learnRange() {
+    if (!VIS.cols) return;
+    const d = S.dist;
+    if (d == null || d === 0xffff || d > 850 || d < 50 || S.distPrev === 0xffff) return;
+    if (Date.now() - (S.distAt || 0) > 400) return; // stale reading
+    const f = (VIS.cols[3] + VIS.cols[4] * 2 + VIS.cols[5]) / 4;
+    const t = (RANGE.tables[headKey()] ||= Array.from({ length: 10 }, () => ({ avg: 0, n: 0 })));
+    const cell = t[Math.min(9, Math.floor(f * 10))];
+    cell.avg = cell.n ? cell.avg + (d - cell.avg) / Math.min(cell.n + 1, 40) : d;
+    cell.n++;
+    if (Date.now() - rangeSaveAt > 5000) { rangeSaveAt = Date.now(); try { localStorage.setItem("looi-range", JSON.stringify(RANGE.tables)); } catch {} }
+  }
+  function camDist(f) {
+    const t = RANGE.tables[headKey()];
+    if (!t) return null;
+    const pts = t.map((c, i) => (c.n >= 3 ? [(i + 0.5) / 10, c.avg] : null)).filter(Boolean);
+    if (pts.length < 2) return null;
+    let a = pts[0], b = pts[1];
+    for (let i = 0; i < pts.length - 1; i++) { a = pts[i]; b = pts[i + 1]; if (f <= b[0]) break; }
+    const d = a[1] + ((f - a[0]) * (b[1] - a[1])) / ((b[0] - a[0]) || 1);
+    return Math.max(40, Math.min(OPEN, Math.round(d)));
+  }
+  function rangeSamples() { const t = RANGE.tables[headKey()]; return t ? t.reduce((n, c) => n + c.n, 0) : 0; }
+  function rangeReady() { const t = RANGE.tables[headKey()]; return !!t && t.filter((c) => c.n >= 3).length >= 2; }
+  // Per-column fused distance in mm (left → right), or null when the camera isn't calibrated yet.
+  function fusedCols() {
+    if (!visFresh() || !rangeReady()) return null;
+    const cols = VIS.cols.map((f) => camDist(f) ?? OPEN);
+    const tof = effDist();
+    if (tof < OPEN) for (const i of [3, 4, 5]) cols[i] = Math.min(cols[i], i === 4 ? tof : tof + 40);
+    else if (S.dist === 0xffff) cols[4] = Math.max(cols[4], 600); // sensor sees nothing straight ahead: trust it over the camera
+    if (S.prox === 0 && tof < 200) for (const i of [3, 4, 5]) cols[i] = Math.min(cols[i], 60); // nose covered
+    return cols;
+  }
+  function fusedFront() { const c = fusedCols(); return c ? Math.min(c[3], c[4], c[5]) : null; }
+  $("range-reset").addEventListener("click", () => { RANGE.tables = {}; try { localStorage.removeItem("looi-range"); } catch {} log("sys", "Camera distance calibration cleared."); });
+
+  // ===================================================================
+  // ---- Odometry, obstacle map, path and home ----
+  //   No wheel encoders, so position is dead-reckoned from every drive command sent to FED0:
+  //   speed from "mm/s at speed 100", turning from the 360° calibration. It drifts; Reset position fixes it.
+  // ===================================================================
+  const ODO = { x: 0, y: 0, th: 0, f: 0, t: 0, at: 0, rec: true, path: [], pts: [], home: null };
+  function odoStep(now) {
+    if (!ODO.at) { ODO.at = now; return; }
+    const dt = Math.min(150, now - ODO.at); // the motors stop ~150 ms after the last command
+    ODO.at = now;
+    if (!dt || (!ODO.f && !ODO.t)) return;
+    ODO.th += ODO.t * degPerUnitMs() * dt;
+    const r = (ODO.th * Math.PI) / 180, v = (ODO.f / 100) * (Number($("nav-speed").value) || 200);
+    ODO.x += (Math.cos(r) * v * dt) / 1000;
+    ODO.y += (Math.sin(r) * v * dt) / 1000;
+  }
+  function odoCommand(bytes) {
+    odoStep(Date.now());
+    ODO.f = bytes[0] > 127 ? bytes[0] - 256 : bytes[0];
+    ODO.t = bytes[1] > 127 ? bytes[1] - 256 : bytes[1];
+  }
+  let lastCamPts = 0;
+  setInterval(() => {
+    const now = Date.now();
+    odoStep(now);
+    if (!device?.gatt?.connected) return;
+    // Path: last 5 minutes, a point every 200 ms when LOOI has moved.
+    if (ODO.rec) {
+      const last = ODO.path[ODO.path.length - 1];
+      if (!last || Math.hypot(ODO.x - last[0], ODO.y - last[1]) > 5) ODO.path.push([ODO.x, ODO.y, now]);
+      while (ODO.path.length && now - ODO.path[0][2] > 5 * 60000) ODO.path.shift();
+    }
+    // Obstacle points in world coordinates from the distance sensor…
+    const r = (ODO.th * Math.PI) / 180;
+    const d = effDist();
+    if (d < OPEN && now - (S.distAt || 0) < 500) ODO.pts.push([ODO.x + Math.cos(r) * d, ODO.y + Math.sin(r) * d, now, 1]);
+    // …and from the calibrated camera columns, spread across its field of view.
+    const fc = fusedCols();
+    if (fc && now - lastCamPts > 400) {
+      lastCamPts = now;
+      const half = visNum("vis-fov", 70) / 2;
+      fc.forEach((cd, i) => {
+        if (i === 4 || cd >= 700) return;
+        const a = r + (((4 - i) / 4) * half * Math.PI) / 180;
+        ODO.pts.push([ODO.x + Math.cos(a) * cd, ODO.y + Math.sin(a) * cd, now, 0]);
+      });
+    }
+    while (ODO.pts.length && (now - ODO.pts[0][2] > 90000 || ODO.pts.length > 500)) ODO.pts.shift();
+  }, 200);
+
+  function navStatus() {
+    const h = ODO.home ? Math.hypot(ODO.home.x - ODO.x, ODO.home.y - ODO.y) : null;
+    $("nav-pos").textContent = `x ${Math.round(ODO.x)} mm · y ${Math.round(ODO.y)} mm · heading ${Math.round(((ODO.th % 360) + 360) % 360)}°`;
+    $("nav-home").textContent = ODO.home ? `set · ${Math.round(h)} mm away` : "not set";
+    $("nav-rec").textContent = ODO.rec ? `recording · ${ODO.path.length} points` : "paused";
+    $("nav-cal").textContent = rangeReady() ? `calibrated (${rangeSamples()} samples at this head tilt)` : `learning… ${rangeSamples()} samples`;
+  }
+  setInterval(navStatus, 500);
+  function navOp(op, on) {
+    if (op === "home-set") { ODO.home = { x: ODO.x, y: ODO.y }; log("sys", "Home set at the current position."); }
+    if (op === "home-clear") { ODO.home = null; log("sys", "Home cleared."); }
+    if (op === "home-go") { if (!ODO.home) { log("err", "Set a home position first."); return "Set a home position first."; } startExplore("home"); }
+    if (op === "reset") { ODO.x = ODO.y = 0; ODO.th = 0; ODO.path = []; ODO.pts = []; ODO.home = null; EX.heading = 0; log("sys", "Position reset: LOOI is now at 0,0 facing 0°. Home and path cleared."); }
+    if (op === "rec") { ODO.rec = !!on; log("sys", ODO.rec ? "Path recording on (last 5 minutes)." : "Path recording paused."); }
+    if (op === "path-clear") { ODO.path = []; log("sys", "Path cleared."); }
+    navStatus();
+    return null;
+  }
+  $("nav-home-set").addEventListener("click", () => navOp("home-set"));
+  $("nav-home-go").addEventListener("click", () => navOp("home-go"));
+  $("nav-reset").addEventListener("click", () => navOp("reset"));
+  $("nav-rec-btn").addEventListener("click", () => navOp("rec", !ODO.rec));
+  async function navSpeedTest() {
+    if (!device?.gatt?.connected || EX.running || driving) return;
+    log("sys", "Speed test: driving forward at speed 100 for 1 second. Measure how far LOOI moved and enter it as mm/s.");
+    const end = Date.now() + 1000;
+    while (Date.now() < end) {
+      if (!cliffAllOn() || effDist() < 120) { log("err", "Speed test stopped early: edge or obstacle."); break; }
+      await write("fed0", new Uint8Array([100, 0]), { response: false, quiet: true }).catch(() => {});
+      await sleep(50);
+    }
+    await write("fed0", fromHex(MOVE.stop), { response: false }).catch(() => {});
+  }
+  $("nav-speedtest").addEventListener("click", navSpeedTest);
+  // Compact copies for the remote console (rounded, decimated).
+  function navTelemetry(full) {
+    const out = { x: Math.round(ODO.x), y: Math.round(ODO.y), th: Math.round(ODO.th * 10) / 10, home: ODO.home && { x: Math.round(ODO.home.x), y: Math.round(ODO.home.y) }, rec: ODO.rec, cal: rangeReady(), samples: rangeSamples() };
+    if (full) {
+      const step = Math.max(1, Math.ceil(ODO.path.length / 400));
+      out.path = ODO.path.filter((_, i) => i % step === 0 || i === ODO.path.length - 1).map((p) => [Math.round(p[0]), Math.round(p[1])]);
+      const now = Date.now();
+      out.pts = ODO.pts.map((p) => [Math.round(p[0]), Math.round(p[1]), Math.round((now - p[2]) / 1000), p[3]]);
+    }
+    return out;
+  }
+
+  // ===================================================================
   // ---- Remote host: lets a PC browser control this phone's LOOI ----
   //   PeerJS (WebRTC) data channel for commands + telemetry, media call for the camera.
   //   The phone stays in charge of safety: deadman on remote driving, forward block, cliff latch.
   // ===================================================================
   var REM = { peer: null, conn: null, call: null, code: null, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
   const REMOTE_SETTINGS = ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-lights", "ex-tilt", "ex-react", "ex-peek",
-    "vis-block", "vis-tol", "vis-fov", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
+    "vis-block", "vis-tol", "vis-fov", "vis-rot", "vis-mirror", "nav-speed", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
   function remCode(fresh) {
     const alpha = "abcdefghjkmnpqrstuvwxyz23456789";
     const make = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => alpha[b % alpha.length]).join("");
@@ -1912,7 +2129,9 @@ You control a real robot on a real desk. Rules:
       ex: { running: EX.running, mode: EX.mode, state: $("ex-state").textContent, event: $("ex-event").textContent, legs: EX.legs, scans: EX.scans, edges: EX.edgeCount },
       vis: visFresh() ? { cols: VIS.cols, center: VIS.center, best: VIS.bestCol, fps: VIS.fps, block: visNum("vis-block", 30) / 100 } : null,
       cam: VIS.running, face: FACE.on, ai: { busy: AI.busy, key: !!$("ai-key").value.trim(), auto: !!AI.autoTimer },
-      remoteDriving: !!REM.driveTimer, latch: REM.latch, safetyOff: !!REM.safetyOff, echo: ECHO.mm,
+      remoteDriving: !!REM.driveTimer, latch: REM.latch, safetyOff: !!REM.safetyOff,
+      view: { rot: Number($("vis-rot").value) || 0, mirror: $("vis-mirror").checked },
+      fused: fusedCols(), nav: navTelemetry((REM.telN = (REM.telN || 0) + 1) % 4 === 0), echo: ECHO.mm,
     });
   }
 
@@ -1953,7 +2172,7 @@ You control a real robot on a real desk. Rules:
       case "light": if (device?.gatt?.connected) await aiLight(!!d.on); break;
       case "explore":
         if (d.mode === "stop") await stopExplore("stopped from PC");
-        else { if (d.mode === "imitate" && !TR.profile) { remNote("No learned style yet — record and learn one first."); break; } remStopDrive(true); startExplore(d.mode === "imitate" ? "imitate" : "explore"); }
+        else { if (d.mode === "imitate" && !TR.profile) { remNote("No learned style yet — record and learn one first."); break; } remStopDrive(true); startExplore(["imitate", "home"].includes(d.mode) ? d.mode : "explore"); }
         break;
       case "cal": $("ex-cal").click(); break;
       case "camera":
@@ -1967,6 +2186,9 @@ You control a real robot on a real desk. Rules:
         REM.safetyOff = !!d.off; REM.latch = false;
         log(REM.safetyOff ? "err" : "sys", REM.safetyOff ? "Remote: SAFETY OFF — obstacle and edge checks disabled for PC driving." : "Remote: safety checks back on for PC driving.");
         break;
+      case "nav": { const err = navOp(d.op, d.on); if (err) remNote(err); break; }
+      case "navcal": navSpeedTest(); break;
+      case "range-reset": $("range-reset").click(); break;
       case "echo-reset": $("ex-echo-reset").click(); break;
       case "setting": {
         if (!REMOTE_SETTINGS.includes(d.id) || !$(d.id)) break;

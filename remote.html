@@ -44,15 +44,23 @@ button.stop { background: var(--bad); color: #fff; border-color: var(--bad); fon
 .chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .chip.ok { color: var(--fg); } .chip.ok::before { background: var(--good); } .chip.warn::before { background: var(--warn); } .chip.bad::before { background: var(--bad); }
 .status { display: flex; flex-wrap: wrap; gap: 8px; }
-.main { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); align-items: start; }
-@media (max-width: 980px) { .main { grid-template-columns: 1fr; } }
-.col { display: grid; gap: 16px; min-width: 0; }
+.layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); align-items: start; }
+@media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+.left, .right { display: grid; gap: 16px; min-width: 0; }
+.duo { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+@media (max-width: 720px) { .duo { grid-template-columns: 1fr; } }
+.log-panel .log { height: 420px; }
+.radar { width: 100%; aspect-ratio: 1; border-radius: 10px; background: #05090c; display: block; }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; }
+.sw.ok { background: #4cd38a; } .sw.bad { background: #ff6b5b; } .sw.box { border: 2px solid var(--fg); }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .hint { color: var(--muted); font-size: .82rem; margin: 0; }
 .video { position: relative; aspect-ratio: 4 / 3; background: #05090c; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
 .video .rot { position: absolute; left: 50%; top: 50%; width: 100%; height: 100%; transform: translate(-50%, -50%); }
-.video .rot video, .video .rot canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.video .rot video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.video > canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .view-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
 .safety-off { color: var(--bad); font-weight: 600; }
 .video .empty { position: absolute; inset: 0; display: grid; place-items: center; color: #8b9aa8; font-size: .95rem; text-align: center; padding: 16px; }
@@ -111,68 +119,66 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 
   <div class="note" id="note" hidden></div>
 
-  <div class="main">
-    <div class="col">
-      <div class="video">
-        <div class="rot" id="rot">
-          <video id="video" autoplay playsinline muted></video>
-          <canvas id="overlay"></canvas>
-        </div>
+  <div class="layout">
+    <div class="left">
+      <div class="video" id="video-box">
+        <div class="rot" id="rot"><video id="video" autoplay playsinline muted></video></div>
+        <canvas id="overlay"></canvas>
         <div class="empty" id="video-empty">Enter the code shown on the phone to link up. The camera feed appears here once the phone's camera is on.</div>
         <div class="hud" id="hud"></div>
       </div>
       <div class="view-bar">
         <div class="row">
-          <button id="rot-left" title="Rotate view left">⟲ 90°</button>
-          <button id="rot-right" title="Rotate view right">⟳ 90°</button>
-          <button id="flip" title="Mirror the view">Mirror</button>
+          <button id="rot-left" title="Rotate camera left">⟲ 90°</button>
+          <button id="rot-right" title="Rotate camera right">⟳ 90°</button>
+          <button id="flip" title="Mirror the camera">Mirror</button>
           <span class="hint" id="rot-val">0°</span>
         </div>
         <label class="toggle"><input type="checkbox" id="safety-off"> <span>Safety off for my driving (no obstacle or edge stops)</span></label>
       </div>
-      <section class="panel">
-        <div class="row" style="justify-content: space-between;">
-          <h2>Drive</h2>
-          <button class="stop" id="btn-stop" disabled>STOP</button>
-        </div>
-        <div class="drive">
-          <div class="stick" id="stick" aria-label="Drive joystick"><span class="knob" id="knob"></span></div>
-          <div class="drive-side">
-            <label>Speed limit <span id="speed-val">60</span><input type="range" id="speed" min="15" max="127" value="60"></label>
-            <label>Head <span id="head-val">135</span><input type="range" id="head" min="0" max="255" value="135"></label>
-            <div class="row">
-              <button data-head="0">Look up</button><button data-head="135">Centre</button><button data-head="255">Look down</button>
-              <button id="btn-light">Light</button>
-            </div>
-            <p class="keys">Keys: W A S D or arrows to drive (combine for curves) · Q / Z head up / down · Space STOP · E explore</p>
-          </div>
-        </div>
-      </section>
-    </div>
+      <p class="hint legend"><i class="sw ok"></i> open floor <i class="sw bad"></i> obstacle within reach <i class="sw box"></i> most open direction · numbers = estimated distance once the camera has learned ranging</p>
 
-    <div class="col">
-      <section class="panel">
-        <h2>Robot</h2>
-        <dl class="kv">
-          <dt>Distance ahead</dt><dd id="t-dist">—</dd>
-          <dt>Camera floor</dt><dd id="t-vis">—</dd>
-          <dt>Edges</dt><dd id="t-cliff">—</dd>
-          <dt>Phone · charger</dt><dd id="t-dock">—</dd>
-          <dt>Light level</dt><dd id="t-prox">—</dd>
-          <dt>Mode</dt><dd id="t-state">—</dd>
-          <dt>Last event</dt><dd id="t-event">—</dd>
-        </dl>
-        <div class="row">
-          <button class="primary" id="btn-explore">Explore</button>
-          <button id="btn-imitate">Drive like me</button>
-          <button id="btn-reconnect">Reconnect robot</button>
-        </div>
-        <div class="row">
-          <button id="btn-cam">Camera on</button>
-          <select id="cam-select" aria-label="Phone camera"><option value="">Rear camera (default)</option></select>
-          <button id="btn-face">Face on</button>
-        </div>
-      </section>
+      <div class="duo">
+        <section class="panel">
+          <h2>Robot</h2>
+          <dl class="kv">
+            <dt>Distance ahead</dt><dd id="t-dist">—</dd>
+            <dt>Fused ahead</dt><dd id="t-fused">—</dd>
+            <dt>Camera floor</dt><dd id="t-vis">—</dd>
+            <dt>Edges</dt><dd id="t-cliff">—</dd>
+            <dt>Phone · charger</dt><dd id="t-dock">—</dd>
+            <dt>Light level</dt><dd id="t-prox">—</dd>
+            <dt>Mode</dt><dd id="t-state">—</dd>
+            <dt>Last event</dt><dd id="t-event">—</dd>
+          </dl>
+          <div class="row">
+            <button class="primary" id="btn-explore">Explore</button>
+            <button id="btn-imitate">Drive like me</button>
+            <button id="btn-reconnect">Reconnect robot</button>
+          </div>
+          <div class="row">
+            <button id="btn-cam">Camera on</button>
+            <select id="cam-select" aria-label="Phone camera"><option value="">Rear camera (default)</option></select>
+            <button id="btn-face">Face on</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="row" style="justify-content: space-between;">
+            <h2>Radar &amp; map</h2>
+            <select id="radar-zoom" aria-label="Map range"><option value="500">0.5 m</option><option value="1000" selected>1 m</option><option value="2000">2 m</option><option value="4000">4 m</option></select>
+          </div>
+          <canvas id="radar" class="radar" aria-label="Radar map around LOOI"></canvas>
+          <p class="hint" id="nav-line">—</p>
+          <div class="row">
+            <button id="nav-home-set">Set home here</button>
+            <button class="primary" id="nav-home-go">Go home</button>
+            <button id="nav-rec">Path: recording</button>
+            <button id="nav-path-clear">Clear path</button>
+            <button id="nav-reset">Reset position</button>
+          </div>
+        </section>
+      </div>
 
       <section class="panel">
         <h2>Talk to LOOI · AI pilot</h2>
@@ -192,20 +198,50 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
           </details>
         </div>
       </section>
+    </div>
+
+    <div class="right">
+      <section class="panel">
+        <div class="row" style="justify-content: space-between;">
+          <h2>Drive</h2>
+          <button class="stop" id="btn-stop" disabled>STOP</button>
+        </div>
+        <div class="drive">
+          <div class="stick" id="stick" aria-label="Drive joystick"><span class="knob" id="knob"></span></div>
+          <div class="drive-side">
+            <label>Speed limit <span id="speed-val">60</span><input type="range" id="speed" min="15" max="127" value="60"></label>
+            <label>Head <span id="head-val">135</span><input type="range" id="head" min="0" max="255" value="135"></label>
+            <div class="row">
+              <button data-head="0">Look up</button><button data-head="135">Centre</button><button data-head="255">Look down</button>
+              <button id="btn-light">Light</button>
+            </div>
+          </div>
+        </div>
+        <p class="keys">Keys: W A S D / arrows drive (combine for curves) · Q / Z head · Space STOP · E explore · H go home</p>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="row" style="justify-content: space-between;">
+          <h2>Phone log</h2>
+          <label class="toggle"><input type="checkbox" id="log-raw"> Show sensor packets</label>
+        </div>
+        <pre class="log" id="log"></pre>
+      </section>
 
       <section class="panel">
         <details>
-          <summary>Explore &amp; vision settings</summary>
+          <summary>Explore, vision &amp; calibration settings</summary>
           <div class="fields" style="margin-top: 10px;">
             <label>Cruise speed<input type="number" data-set="ex-cruise" min="15" max="100" step="5"></label>
             <label>Turn speed<input type="number" data-set="ex-turn" min="20" max="100" step="5"></label>
             <label>Obstacle stop (mm)<input type="number" data-set="ex-stopdist" min="80" max="500" step="10"></label>
-            <label>360° time (ms)<input type="number" data-set="ex-spin" min="800" max="10000" step="100"></label>
-            <label>Head tilt exploring<input type="number" data-set="ex-tilt" min="0" max="255" step="5"></label>
             <label>Camera reacts within (mm)<input type="number" data-set="ex-react" min="100" max="900" step="50"></label>
+            <label>Head tilt exploring<input type="number" data-set="ex-tilt" min="0" max="255" step="5"></label>
             <label>Blocked below (%)<input type="number" data-set="vis-block" min="5" max="80" step="5"></label>
             <label>Floor tolerance<input type="number" data-set="vis-tol" min="0.02" max="0.3" step="0.01"></label>
             <label>Camera FOV (°)<input type="number" data-set="vis-fov" min="40" max="130" step="5"></label>
+            <label>360° time (ms)<input type="number" data-set="ex-spin" min="800" max="10000" step="100"></label>
+            <label>mm/s at speed 100<input type="number" data-set="nav-speed" min="30" max="1000" step="10"></label>
           </div>
           <div class="row" style="margin-top: 10px;">
             <label class="toggle"><input type="checkbox" data-set="vis-steer"> Steer with camera</label>
@@ -215,17 +251,15 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
           </div>
           <div class="row" style="margin-top: 10px;">
             <button id="btn-cal" type="button">Test 360° spin</button>
+            <button id="btn-speedtest" type="button">Speed test: 1 s at 100</button>
+            <button id="btn-range-reset" type="button">Reset camera ranging</button>
             <button id="btn-echo" type="button">Reset self-echo filter</button>
           </div>
+          <p class="hint" style="margin-top: 8px;">Calibrate in this order: 360° spin time, then the speed test (measure how far LOOI went in mm and enter it as mm/s). The map, path and Go home depend on both.</p>
         </details>
       </section>
     </div>
   </div>
-
-  <section class="panel">
-    <h2>Phone log</h2>
-    <pre class="log" id="log"></pre>
-  </section>
 </div>
 
 <script>
@@ -238,6 +272,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   function note(msg) { const n = $("note"); n.textContent = msg; n.hidden = false; clearTimeout(note.t); note.t = setTimeout(() => (n.hidden = true), 6000); }
   function send(m) { try { if (R.conn?.open) R.conn.send(m); } catch {} }
   function addLog(kind, line) {
+    if (/← FED9|← FED8|→ FED0|→ FED1/.test(line) && !$("log-raw").checked) return; // routine packets flood the log
     const span = document.createElement("span"); span.className = kind; span.textContent = line + "\n";
     const el = $("log"); el.appendChild(span);
     while (el.childNodes.length > 600) el.removeChild(el.firstChild);
@@ -306,6 +341,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     if (!d || typeof d !== "object") return;
     if (d.t === "busy") { note("Another computer is already controlling this LOOI."); unlink(); return; }
     if (d.t === "hello") {
+      if (d.settings?.["vis-rot"] != null) { VIEW.deg = Number(d.settings["vis-rot"]) || 0; VIEW.mirror = !!d.settings["vis-mirror"]; applyView(); }
       document.querySelectorAll("[data-set]").forEach((el) => {
         const v = d.settings?.[el.dataset.set];
         if (v == null) return;
@@ -325,6 +361,13 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 
   function showTel(d) {
     R.tel = d;
+    if (d.view && (d.view.rot !== VIEW.deg || d.view.mirror !== VIEW.mirror)) { VIEW.deg = d.view.rot; VIEW.mirror = d.view.mirror; applyView(); }
+    if (d.nav?.path) NAV.path = d.nav.path;
+    if (d.nav?.pts) NAV.pts = d.nav.pts;
+    $("t-fused").textContent = d.fused ? `${Math.min(d.fused[3], d.fused[4], d.fused[5]) >= 900 ? "clear" : Math.min(d.fused[3], d.fused[4], d.fused[5]) + " mm"} (camera + distance + close-range)` : d.nav && !d.nav.cal ? `camera still learning ranging (${d.nav.samples})` : "—";
+    navLine(); drawRadar();
+    $("nav-home-go").textContent = d.ex?.running && d.ex.mode === "home" ? "Stop going home" : "Go home";
+    $("nav-home-go").disabled = !d.nav?.home;
     const S = d.S || {};
     chip("st-ble", d.ble ? `Robot · ${d.name || "LOOI"}` : "Robot disconnected", d.ble ? "ok" : "bad");
     if (S.battery != null) chip("st-batt", `Battery ${S.battery}%${S.charging ? " ⚡" : ""}`, S.battery > 20 ? "ok" : "warn");
@@ -336,7 +379,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     $("t-prox").textContent = S.prox == null ? "—" : String(S.prox);
     $("t-state").textContent = d.remoteDriving ? "You're driving" : d.ex?.running ? `${d.ex.mode === "imitate" ? "Drive like me" : "Explore"} · ${d.ex.state}` : d.ai?.busy ? "AI is acting" : "Idle";
     $("t-event").textContent = d.ex?.event || "—";
-    $("btn-explore").textContent = d.ex?.running ? "Stop exploring" : "Explore";
+    $("btn-explore").textContent = d.ex?.running ? "Stop" : "Explore";
     $("btn-explore").classList.toggle("on", !!d.ex?.running);
     $("btn-cam").textContent = d.cam ? "Camera off" : "Camera on";
     $("btn-face").textContent = d.face ? "Face off" : "Face on";
@@ -354,18 +397,26 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     $("hud").innerHTML = hud.map(([t, a]) => `<span class="${a ? "alert" : ""}">${t}</span>`).join("");
     drawOverlay(d.vis);
   }
+  // The phone analyses the frame the right way up, so the overlay is drawn upright over the (rotated) video.
   function drawOverlay(v) {
     const c = $("overlay"), g = c.getContext("2d");
     c.width = c.clientWidth; c.height = c.clientHeight;
     g.clearRect(0, 0, c.width, c.height);
     if (!v || !v.cols || !$("video").srcObject) return;
-    const cw = c.width / v.cols.length;
+    const fused = R.tel?.fused, cw = c.width / v.cols.length;
+    let best = v.best;
+    if (fused) best = fused.indexOf(Math.max(...fused));
     v.cols.forEach((f, i) => {
-      g.globalAlpha = 0.3; g.fillStyle = f < v.block ? "#ff6b5b" : "#4cd38a";
+      const near = fused ? fused[i] < 300 : f < v.block;
+      g.globalAlpha = 0.3; g.fillStyle = near ? "#ff6b5b" : "#4cd38a";
       g.fillRect(i * cw + 1, c.height * (1 - f), cw - 2, c.height * f);
+      if (fused) {
+        g.globalAlpha = 0.95; g.fillStyle = "#fff"; g.font = "600 12px IBM Plex Mono, monospace"; g.textAlign = "center";
+        g.fillText(fused[i] >= 900 ? "far" : `${Math.round(fused[i] / 10)}cm`, i * cw + cw / 2, Math.max(14, c.height * (1 - f) - 6));
+      }
     });
     g.globalAlpha = 1; g.strokeStyle = "#fff"; g.lineWidth = 2;
-    g.strokeRect(v.best * cw + 1, 1, cw - 2, c.height - 2);
+    g.strokeRect(best * cw + 1, 1, cw - 2, c.height - 2);
   }
 
   // ---- Driving: stream the joystick vector every 80 ms while active; the phone stops if this goes quiet ----
@@ -408,6 +459,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     const k = e.key.toLowerCase();
     if (k === " ") { e.preventDefault(); stopAll(); return; }
     if (k === "e" && !e.repeat) { toggleExplore("explore"); return; }
+    if (k === "h" && !e.repeat) { send({ t: "explore", mode: R.tel?.ex?.running ? "stop" : "home" }); return; }
     if ((k === "q" || k === "z") && !e.repeat) { const v = Math.max(0, Math.min(255, Number($("head").value) + (k === "q" ? -30 : 30))); setHead(v); return; }
     const dir = KEYS[k]; if (!dir) return;
     e.preventDefault(); if (e.repeat) return;
@@ -457,9 +509,11 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     try { localStorage.setItem("looi-remote-view", JSON.stringify(VIEW)); } catch {}
     drawOverlay(R.tel?.vis);
   }
-  $("rot-left").addEventListener("click", () => { VIEW.deg = (VIEW.deg + 270) % 360; applyView(); });
-  $("rot-right").addEventListener("click", () => { VIEW.deg = (VIEW.deg + 90) % 360; applyView(); });
-  $("flip").addEventListener("click", () => { VIEW.mirror = !VIEW.mirror; applyView(); });
+  // Rotation is a phone setting: the phone needs it to analyse the image the right way up.
+  function pushView() { send({ t: "setting", id: "vis-rot", value: String(VIEW.deg) }); send({ t: "setting", id: "vis-mirror", value: VIEW.mirror }); applyView(); }
+  $("rot-left").addEventListener("click", () => { VIEW.deg = (VIEW.deg + 270) % 360; pushView(); });
+  $("rot-right").addEventListener("click", () => { VIEW.deg = (VIEW.deg + 90) % 360; pushView(); });
+  $("flip").addEventListener("click", () => { VIEW.mirror = !VIEW.mirror; pushView(); });
   window.addEventListener("resize", applyView);
   applyView();
 
@@ -468,6 +522,93 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     send({ t: "safety", off: e.target.checked });
     e.target.parentElement.classList.toggle("safety-off", e.target.checked);
   });
+  // ---- Radar & map: robot in the centre, heading up. Path, obstacle points, home and the live sensor fan. ----
+  const NAV = { path: [], pts: [] };
+  function drawRadar() {
+    const c = $("radar"), g = c.getContext("2d"), dpr = devicePixelRatio || 1;
+    const W = (c.width = Math.round(c.clientWidth * dpr)), H = (c.height = Math.round(c.clientWidth * dpr));
+    const css = getComputedStyle(document.documentElement), col = (n) => css.getPropertyValue(n).trim();
+    g.fillStyle = "#05090c"; g.fillRect(0, 0, W, H);
+    const range = Number($("radar-zoom").value) || 1000, cx = W / 2, cy = H / 2, sc = (W / 2 - 14 * dpr) / range;
+    // rings
+    g.strokeStyle = "rgba(139,154,168,.25)"; g.lineWidth = dpr; g.fillStyle = "rgba(139,154,168,.7)"; g.font = `${10 * dpr}px ${col("--f-mono") || "monospace"}`;
+    for (let k = 1; k <= 4; k++) {
+      const r = (range * k) / 4;
+      g.beginPath(); g.arc(cx, cy, r * sc, 0, Math.PI * 2); g.stroke();
+      g.fillText(r >= 1000 ? `${(r / 1000).toFixed(r % 1000 ? 1 : 0)} m` : `${r} mm`, cx + 4 * dpr, cy - r * sc - 3 * dpr);
+    }
+    const t = R.tel;
+    const nav = t?.nav;
+    if (!nav) { g.fillText("waiting for the phone…", cx - 60 * dpr, cy + 30 * dpr); return; }
+    const a = (nav.th * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
+    // world (x forward at start, y left) → screen (heading up)
+    const toS = (wx, wy) => { const dx = wx - nav.x, dy = wy - nav.y; const fwd = dx * ca + dy * sa, left = -dx * sa + dy * ca; return [cx - left * sc, cy - fwd * sc]; };
+    // path
+    if (NAV.path.length > 1) {
+      g.strokeStyle = col("--accent"); g.lineWidth = 2 * dpr; g.globalAlpha = 0.8;
+      g.beginPath(); NAV.path.forEach(([x, y], i) => { const [sx, sy] = toS(x, y); i ? g.lineTo(sx, sy) : g.moveTo(sx, sy); }); g.stroke();
+      g.globalAlpha = 1;
+    }
+    // obstacle points: distance sensor (red), camera estimates (amber); older = fainter
+    for (const [x, y, age, src] of NAV.pts) {
+      const [sx, sy] = toS(x, y);
+      if (sx < 0 || sy < 0 || sx > W || sy > H) continue;
+      g.globalAlpha = Math.max(0.15, 1 - age / 90);
+      g.fillStyle = src ? "#ff6b5b" : "#f0a63a";
+      g.beginPath(); g.arc(sx, sy, (src ? 3 : 2.2) * dpr, 0, Math.PI * 2); g.fill();
+    }
+    g.globalAlpha = 1;
+    // live fan: fused camera columns + distance sensor ray
+    const fov = Number(document.querySelector('[data-set="vis-fov"]').value) || 70;
+    if (t.fused) {
+      t.fused.forEach((d, i) => {
+        const ang = (((4 - i) / 4) * fov) / 2, rad = (ang * Math.PI) / 180, dd = Math.min(d, range);
+        const ex = cx - Math.sin(rad) * dd * sc, ey = cy - Math.cos(rad) * dd * sc;
+        g.strokeStyle = d < 300 ? "rgba(255,107,91,.75)" : "rgba(76,211,138,.45)"; g.lineWidth = 6 * dpr;
+        g.beginPath(); g.moveTo(cx, cy); g.lineTo(ex, ey); g.stroke();
+      });
+    }
+    const S = t.S || {};
+    if (S.dist != null) {
+      const d = S.dist === 0xffff ? range : Math.min(S.dist, range);
+      g.strokeStyle = S.dist === 0xffff ? "rgba(227,233,238,.35)" : "#ff6b5b"; g.lineWidth = 2 * dpr; g.setLineDash([4 * dpr, 4 * dpr]);
+      g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx, cy - d * sc); g.stroke(); g.setLineDash([]);
+    }
+    // home
+    if (nav.home) {
+      let [hx, hy] = toS(nav.home.x, nav.home.y);
+      const dist = Math.hypot(nav.home.x - nav.x, nav.home.y - nav.y);
+      const lim = W / 2 - 10 * dpr, vx = hx - cx, vy = hy - cy, vl = Math.hypot(vx, vy);
+      const off = vl > lim;
+      if (off) { hx = cx + (vx / vl) * lim; hy = cy + (vy / vl) * lim; }
+      g.strokeStyle = "rgba(255,209,102,.6)"; g.lineWidth = 1.5 * dpr; g.setLineDash([2 * dpr, 4 * dpr]);
+      g.beginPath(); g.moveTo(cx, cy); g.lineTo(hx, hy); g.stroke(); g.setLineDash([]);
+      g.fillStyle = "#ffd166";
+      g.beginPath(); g.moveTo(hx, hy - 8 * dpr); g.lineTo(hx + 7 * dpr, hy); g.lineTo(hx, hy + 8 * dpr); g.lineTo(hx - 7 * dpr, hy); g.closePath(); g.fill();
+      g.fillText(`home ${dist >= 1000 ? (dist / 1000).toFixed(2) + " m" : Math.round(dist) + " mm"}${off ? " →" : ""}`, hx + 9 * dpr, hy + 4 * dpr);
+    }
+    // robot
+    g.fillStyle = "#e3e9ee";
+    g.beginPath(); g.moveTo(cx, cy - 10 * dpr); g.lineTo(cx - 7 * dpr, cy + 8 * dpr); g.lineTo(cx + 7 * dpr, cy + 8 * dpr); g.closePath(); g.fill();
+  }
+  function navLine() {
+    const n = R.tel?.nav;
+    if (!n) return;
+    $("nav-line").textContent = `x ${n.x} · y ${n.y} mm · heading ${Math.round(((n.th % 360) + 360) % 360)}° · camera ranging ${n.cal ? "calibrated" : `learning (${n.samples})`}`;
+    $("nav-rec").textContent = n.rec ? "Path: recording" : "Path: paused";
+    $("nav-rec").classList.toggle("on", !!n.rec);
+  }
+  $("radar-zoom").addEventListener("change", drawRadar);
+  $("nav-home-set").addEventListener("click", () => send({ t: "nav", op: "home-set" }));
+  $("nav-home-go").addEventListener("click", () => send({ t: "explore", mode: R.tel?.ex?.running && R.tel.ex.mode === "home" ? "stop" : "home" }));
+  $("nav-rec").addEventListener("click", () => send({ t: "nav", op: "rec", on: !R.tel?.nav?.rec }));
+  $("nav-path-clear").addEventListener("click", () => send({ t: "nav", op: "path-clear" }));
+  $("nav-reset").addEventListener("click", () => send({ t: "nav", op: "reset" }));
+  $("btn-speedtest").addEventListener("click", () => send({ t: "navcal" }));
+  $("btn-range-reset").addEventListener("click", () => send({ t: "range-reset" }));
+  drawRadar();
+
+  window.addEventListener("resize", drawRadar);
   if (q0) link();
 })();
 </script>
