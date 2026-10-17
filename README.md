@@ -16,6 +16,8 @@ A single-page controller for the TangibleFuture LOOI desk robot. It talks straig
 - **Eyes**: rear-camera free-floor detection that steers Explore (it only triggers avoidance within the *Camera reacts within* distance, 300 mm by default), a head-tilt "second look" when camera and distance disagree, and a full-screen face for the Flip's cover screen
 - **Sensor fusion**: the camera learns to judge distance from the distance sensor (per head tilt), giving each of 9 columns a distance estimate; the distance sensor overrides the centre and the close-range sensor confirms contact
 - **Map & home**: dead-reckoned position from every drive command, a live radar with obstacle points, the last 5 minutes of path, Set home / Go home
+- **Cat face**: hunting cat while cruising, red and curious when blocked, a happy burst when it finds a way out, scared at edges
+- **Audio & light**: listen to the phone's microphone, talk through its speaker (hold to talk), make it say things or play sounds, toggle the flashlight
 - **Remote console**: live camera with vision overlay, telemetry, joystick, Explore, AI chat and settings from a PC browser. Rotate or mirror the video to match how the phone sits. Remote driving keeps a 300 ms deadman (if the PC goes quiet, it stops). The forward block and edge stop can be switched off with **Safety off** on the PC; they come back on when the PC disconnects
 
 ## Run on the phone (Galaxy Z Flip 4 on LOOI)

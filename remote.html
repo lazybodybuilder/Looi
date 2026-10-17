@@ -44,12 +44,21 @@ button.stop { background: var(--bad); color: #fff; border-color: var(--bad); fon
 .chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
 .chip.ok { color: var(--fg); } .chip.ok::before { background: var(--good); } .chip.warn::before { background: var(--warn); } .chip.bad::before { background: var(--bad); }
 .status { display: flex; flex-wrap: wrap; gap: 8px; }
-.layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr); align-items: start; }
-@media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
-.left, .right { display: grid; gap: 16px; min-width: 0; }
+.wrap { max-width: 1800px; }
+.layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.5fr) minmax(330px, 1fr) minmax(300px, 0.85fr); align-items: start; }
+@media (max-width: 1400px) { .layout { grid-template-columns: minmax(0, 1.4fr) minmax(330px, 1fr); } .layout > .col:last-child { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; } }
+@media (max-width: 900px) { .layout, .layout > .col:last-child { grid-template-columns: 1fr; } }
+.col { display: grid; gap: 16px; min-width: 0; align-content: start; }
+.phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: pointer; user-select: none; }
+.phead .row { flex-wrap: nowrap; }
+.pbody { display: grid; gap: 12px; min-width: 0; }
+.fold { padding: 2px 8px; font-size: .9rem; line-height: 1; transition: transform .15s; }
+.panel.collapsed .pbody { display: none; }
+.panel.collapsed .fold { transform: rotate(-90deg); }
+button.listening { background: var(--good); color: #fff; border-color: var(--good); }
 .duo { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
 @media (max-width: 720px) { .duo { grid-template-columns: 1fr; } }
-.log-panel .log { height: 420px; }
+.log-panel .log { height: 380px; }
 .radar { width: 100%; aspect-ratio: 1; border-radius: 10px; background: #05090c; display: block; }
 .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; }
@@ -120,118 +129,148 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   <div class="note" id="note" hidden></div>
 
   <div class="layout">
-    <div class="left">
-      <div class="video" id="video-box">
-        <div class="rot" id="rot"><video id="video" autoplay playsinline muted></video></div>
-        <canvas id="overlay"></canvas>
-        <div class="empty" id="video-empty">Enter the code shown on the phone to link up. The camera feed appears here once the phone's camera is on.</div>
-        <div class="hud" id="hud"></div>
-      </div>
-      <div class="view-bar">
-        <div class="row">
-          <button id="rot-left" title="Rotate camera left">⟲ 90°</button>
-          <button id="rot-right" title="Rotate camera right">⟳ 90°</button>
-          <button id="flip" title="Mirror the camera">Mirror</button>
-          <span class="hint" id="rot-val">0°</span>
+    <div class="col">
+      <section class="panel" data-pane="camera">
+        <div class="phead"><h2>Camera</h2><button class="fold" aria-label="Collapse or expand">▾</button></div>
+        <div class="pbody">
+          <div class="video" id="video-box">
+            <div class="rot" id="rot"><video id="video" autoplay playsinline muted></video></div>
+            <canvas id="overlay"></canvas>
+            <div class="empty" id="video-empty">Enter the code shown on the phone to link up. The camera feed appears here once the phone's camera is on.</div>
+            <div class="hud" id="hud"></div>
+          </div>
+          <div class="view-bar">
+            <div class="row">
+              <button id="rot-left" title="Rotate camera left">⟲ 90°</button>
+              <button id="rot-right" title="Rotate camera right">⟳ 90°</button>
+              <button id="flip" title="Mirror the camera">Mirror</button>
+              <span class="hint" id="rot-val">0°</span>
+            </div>
+            <div class="row">
+              <button id="btn-listen" title="Hear the phone's microphone">🔈 Listen</button>
+              <button id="btn-torch" title="Phone flashlight">Flashlight</button>
+              <button id="btn-face" title="LOOI's face on the cover screen">Face on</button>
+            </div>
+          </div>
+          <div class="view-bar">
+            <p class="hint legend"><i class="sw ok"></i> open floor <i class="sw bad"></i> obstacle within reach <i class="sw box"></i> most open direction · numbers = estimated distance</p>
+            <label class="toggle"><input type="checkbox" id="safety-off"> <span>Safety off for my driving</span></label>
+          </div>
         </div>
-        <label class="toggle"><input type="checkbox" id="safety-off"> <span>Safety off for my driving (no obstacle or edge stops)</span></label>
-      </div>
-      <p class="hint legend"><i class="sw ok"></i> open floor <i class="sw bad"></i> obstacle within reach <i class="sw box"></i> most open direction · numbers = estimated distance once the camera has learned ranging</p>
+      </section>
 
       <div class="duo">
-        <section class="panel">
-          <h2>Robot</h2>
-          <dl class="kv">
-            <dt>Distance ahead</dt><dd id="t-dist">—</dd>
-            <dt>Fused ahead</dt><dd id="t-fused">—</dd>
-            <dt>Camera floor</dt><dd id="t-vis">—</dd>
-            <dt>Edges</dt><dd id="t-cliff">—</dd>
-            <dt>Phone · charger</dt><dd id="t-dock">—</dd>
-            <dt>Light level</dt><dd id="t-prox">—</dd>
-            <dt>Mode</dt><dd id="t-state">—</dd>
-            <dt>Last event</dt><dd id="t-event">—</dd>
-          </dl>
-          <div class="row">
-            <button class="primary" id="btn-explore">Explore</button>
-            <button id="btn-imitate">Drive like me</button>
-            <button id="btn-reconnect">Reconnect robot</button>
-          </div>
-          <div class="row">
-            <button id="btn-cam">Camera on</button>
-            <select id="cam-select" aria-label="Phone camera"><option value="">Rear camera (default)</option></select>
-            <button id="btn-face">Face on</button>
+        <section class="panel" data-pane="robot">
+          <div class="phead"><h2>Robot</h2><button class="fold" aria-label="Collapse or expand">▾</button></div>
+          <div class="pbody">
+            <dl class="kv">
+              <dt>Distance ahead</dt><dd id="t-dist">—</dd>
+              <dt>Fused ahead</dt><dd id="t-fused">—</dd>
+              <dt>Camera floor</dt><dd id="t-vis">—</dd>
+              <dt>Edges</dt><dd id="t-cliff">—</dd>
+              <dt>Phone · charger</dt><dd id="t-dock">—</dd>
+              <dt>Light level</dt><dd id="t-prox">—</dd>
+              <dt>Mood</dt><dd id="t-mood">—</dd>
+              <dt>Mode</dt><dd id="t-state">—</dd>
+              <dt>Last event</dt><dd id="t-event">—</dd>
+            </dl>
+            <div class="row">
+              <button class="primary" id="btn-explore">Explore</button>
+              <button id="btn-imitate">Drive like me</button>
+              <button id="btn-reconnect">Reconnect robot</button>
+            </div>
+            <div class="row">
+              <button id="btn-cam">Camera on</button>
+              <select id="cam-select" aria-label="Phone camera"><option value="">Rear camera (default)</option></select>
+            </div>
           </div>
         </section>
 
-        <section class="panel">
-          <div class="row" style="justify-content: space-between;">
-            <h2>Radar &amp; map</h2>
-            <select id="radar-zoom" aria-label="Map range"><option value="500">0.5 m</option><option value="1000" selected>1 m</option><option value="2000">2 m</option><option value="4000">4 m</option></select>
+        <section class="panel" data-pane="radar">
+          <div class="phead"><h2>Radar &amp; map</h2>
+            <div class="row"><select id="radar-zoom" aria-label="Map range"><option value="500">0.5 m</option><option value="1000" selected>1 m</option><option value="2000">2 m</option><option value="4000">4 m</option></select><button class="fold" aria-label="Collapse or expand">▾</button></div>
           </div>
-          <canvas id="radar" class="radar" aria-label="Radar map around LOOI"></canvas>
-          <p class="hint" id="nav-line">—</p>
-          <div class="row">
-            <button id="nav-home-set">Set home here</button>
-            <button class="primary" id="nav-home-go">Go home</button>
-            <button id="nav-rec">Path: recording</button>
-            <button id="nav-path-clear">Clear path</button>
-            <button id="nav-reset">Reset position</button>
+          <div class="pbody">
+            <canvas id="radar" class="radar" aria-label="Radar map around LOOI"></canvas>
+            <p class="hint" id="nav-line">—</p>
+            <div class="row">
+              <button id="nav-home-set">Set home here</button>
+              <button class="primary" id="nav-home-go">Go home</button>
+              <button id="nav-rec">Path: recording</button>
+              <button id="nav-path-clear">Clear path</button>
+              <button id="nav-reset">Reset position</button>
+            </div>
           </div>
         </section>
       </div>
+    </div>
 
-      <section class="panel">
-        <h2>Talk to LOOI · AI pilot</h2>
-        <div class="chat" id="chat"><div class="msg sys">The AI runs on the phone and sees through its camera. Set your OpenAI key once below if the phone doesn't have it yet.</div></div>
-        <form class="ai-input" id="ai-form">
-          <input id="ai-text" placeholder="e.g. look around and tell me what's on my desk" autocomplete="off">
-          <button class="primary" type="submit">Send</button>
-        </form>
-        <div class="row">
-          <label class="toggle"><input type="checkbox" id="ai-auto"> Autonomous mode</label>
-          <details style="flex: 1;">
-            <summary>OpenAI key</summary>
-            <div class="row" style="margin-top: 8px;">
-              <input id="ai-key" type="password" placeholder="sk-…" autocomplete="off" style="flex: 1;">
-              <button id="btn-key" type="button">Send to phone</button>
+    <div class="col">
+      <section class="panel" data-pane="drive">
+        <div class="phead"><h2>Drive</h2><div class="row"><button class="stop" id="btn-stop" disabled>STOP</button><button class="fold" aria-label="Collapse or expand">▾</button></div></div>
+        <div class="pbody">
+          <div class="drive">
+            <div class="stick" id="stick" aria-label="Drive joystick"><span class="knob" id="knob"></span></div>
+            <div class="drive-side">
+              <label>Speed limit <span id="speed-val">60</span><input type="range" id="speed" min="15" max="127" value="60"></label>
+              <label>Head <span id="head-val">135</span><input type="range" id="head" min="0" max="255" value="135"></label>
+              <div class="row">
+                <button data-head="0">Look up</button><button data-head="135">Centre</button><button data-head="255">Look down</button>
+                <button id="btn-light">Light</button>
+              </div>
             </div>
-          </details>
+          </div>
+          <p class="keys">Arrow keys or W A S D move the joystick (combine for curves, hold to speed up) · Q / Z head · Space STOP · E explore · H go home</p>
+        </div>
+      </section>
+
+      <section class="panel" data-pane="ai">
+        <div class="phead"><h2>Talk to LOOI · AI pilot</h2><button class="fold" aria-label="Collapse or expand">▾</button></div>
+        <div class="pbody">
+          <div class="chat" id="chat"><div class="msg sys">The AI runs on the phone and sees through its camera. Set your OpenAI key once below if the phone doesn't have it yet.</div></div>
+          <form class="ai-input" id="ai-form">
+            <input id="ai-text" placeholder="e.g. look around and tell me what's on my desk" autocomplete="off">
+            <button class="primary" type="submit">Send</button>
+          </form>
+          <div class="row">
+            <label class="toggle"><input type="checkbox" id="ai-auto"> Autonomous mode</label>
+            <details style="flex: 1;">
+              <summary>OpenAI key</summary>
+              <div class="row" style="margin-top: 8px;">
+                <input id="ai-key" type="password" placeholder="sk-…" autocomplete="off" style="flex: 1;">
+                <button id="btn-key" type="button">Send to phone</button>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" data-pane="speaker">
+        <div class="phead"><h2>Phone speaker</h2><button class="fold" aria-label="Collapse or expand">▾</button></div>
+        <div class="pbody">
+          <form class="ai-input" id="say-form">
+            <input id="say-text" placeholder="Type something for LOOI to say out loud" autocomplete="off">
+            <button type="submit">Say</button>
+          </form>
+          <div class="row">
+            <button data-sound="chirp">Chirp</button><button data-sound="happy">Happy</button><button data-sound="sad">Sad</button><button data-sound="purr">Purr</button><button data-sound="alarm">Alarm</button>
+            <button class="primary" id="btn-ptt" title="Hold to talk through LOOI">🎙 Hold to talk</button>
+          </div>
+          <p class="hint">Hold to talk sends your PC microphone to the phone's speaker. Space and the arrow keys keep driving while you hold it with the mouse.</p>
         </div>
       </section>
     </div>
 
-    <div class="right">
-      <section class="panel">
-        <div class="row" style="justify-content: space-between;">
-          <h2>Drive</h2>
-          <button class="stop" id="btn-stop" disabled>STOP</button>
-        </div>
-        <div class="drive">
-          <div class="stick" id="stick" aria-label="Drive joystick"><span class="knob" id="knob"></span></div>
-          <div class="drive-side">
-            <label>Speed limit <span id="speed-val">60</span><input type="range" id="speed" min="15" max="127" value="60"></label>
-            <label>Head <span id="head-val">135</span><input type="range" id="head" min="0" max="255" value="135"></label>
-            <div class="row">
-              <button data-head="0">Look up</button><button data-head="135">Centre</button><button data-head="255">Look down</button>
-              <button id="btn-light">Light</button>
-            </div>
-          </div>
-        </div>
-        <p class="keys">Keys: W A S D / arrows drive (combine for curves) · Q / Z head · Space STOP · E explore · H go home</p>
+    <div class="col">
+      <section class="panel log-panel" data-pane="log">
+        <div class="phead"><h2>Phone log</h2><div class="row"><label class="toggle"><input type="checkbox" id="log-raw"> Sensor packets</label><button class="fold" aria-label="Collapse or expand">▾</button></div></div>
+        <div class="pbody"><pre class="log" id="log"></pre></div>
       </section>
 
-      <section class="panel log-panel">
-        <div class="row" style="justify-content: space-between;">
-          <h2>Phone log</h2>
-          <label class="toggle"><input type="checkbox" id="log-raw"> Show sensor packets</label>
-        </div>
-        <pre class="log" id="log"></pre>
-      </section>
-
-      <section class="panel">
-        <details>
-          <summary>Explore, vision &amp; calibration settings</summary>
-          <div class="fields" style="margin-top: 10px;">
+      <section class="panel" data-pane="settings">
+        <div class="phead"><h2>Explore, vision &amp; calibration</h2><button class="fold" aria-label="Collapse or expand">▾</button></div>
+        <div class="pbody">
+          <div class="fields">
             <label>Cruise speed<input type="number" data-set="ex-cruise" min="15" max="100" step="5"></label>
             <label>Turn speed<input type="number" data-set="ex-turn" min="20" max="100" step="5"></label>
             <label>Obstacle stop (mm)<input type="number" data-set="ex-stopdist" min="80" max="500" step="10"></label>
@@ -243,20 +282,20 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
             <label>360° time (ms)<input type="number" data-set="ex-spin" min="800" max="10000" step="100"></label>
             <label>mm/s at speed 100<input type="number" data-set="nav-speed" min="30" max="1000" step="10"></label>
           </div>
-          <div class="row" style="margin-top: 10px;">
+          <div class="row">
             <label class="toggle"><input type="checkbox" data-set="vis-steer"> Steer with camera</label>
             <label class="toggle"><input type="checkbox" data-set="ex-peek"> Second look</label>
             <label class="toggle"><input type="checkbox" data-set="ex-lights"> Light in the dark</label>
             <label class="toggle"><input type="checkbox" data-set="vis-ai"> AI can see</label>
           </div>
-          <div class="row" style="margin-top: 10px;">
+          <div class="row">
             <button id="btn-cal" type="button">Test 360° spin</button>
             <button id="btn-speedtest" type="button">Speed test: 1 s at 100</button>
             <button id="btn-range-reset" type="button">Reset camera ranging</button>
             <button id="btn-echo" type="button">Reset self-echo filter</button>
           </div>
-          <p class="hint" style="margin-top: 8px;">Calibrate in this order: 360° spin time, then the speed test (measure how far LOOI went in mm and enter it as mm/s). The map, path and Go home depend on both.</p>
-        </details>
+          <p class="hint">Calibrate in this order: 360° spin time, then the speed test (measure how far LOOI went in mm and enter it as mm/s). The map, path and Go home depend on both.</p>
+        </div>
       </section>
     </div>
   </div>
@@ -383,6 +422,11 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     $("btn-explore").classList.toggle("on", !!d.ex?.running);
     $("btn-cam").textContent = d.cam ? "Camera off" : "Camera on";
     $("btn-face").textContent = d.face ? "Face off" : "Face on";
+    $("btn-face").classList.toggle("on", !!d.face);
+    $("btn-torch").classList.toggle("on", !!d.torch?.on);
+    $("btn-torch").title = d.torch?.available ? "Phone flashlight" : "Flashlight needs the main rear camera running";
+    $("btn-listen").classList.toggle("listening", !!d.mic && !$("video").muted);
+    $("t-mood").textContent = { hunt: "hunting cat 🐾", blocked: "curious, looking for a way out", happy: "happy — found a way", scared: "scared — edge!", thinking: "thinking", sleepy: "sleepy", calm: "calm" }[d.mood] || "—";
     $("btn-light").classList.toggle("on", !!S.light);
     $("ai-auto").checked = !!d.ai?.auto;
     if (document.activeElement !== $("head") && S.head != null) { $("head").value = S.head; $("head-val").textContent = S.head; }
@@ -448,27 +492,42 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   ["pointerup", "pointercancel", "lostpointercapture"].forEach((ev) => stick.addEventListener(ev, (e) => { if (e.pointerId === R.stickPointer) { R.stickPointer = null; stopDriveSend(true); } }));
 
   const KEYS = { arrowup: "f", w: "f", arrowdown: "b", s: "b", arrowleft: "l", a: "l", arrowright: "r", d: "r" };
+  // Keys move the on-screen joystick like a thumb would: the knob eases toward the pressed direction,
+  // so a short tap is a gentle nudge and holding builds up to full speed.
+  let keyAnim = null;
   function keyVec() {
     const y = (R.keys.has("f") ? 1 : 0) - (R.keys.has("b") ? 1 : 0), x = (R.keys.has("r") ? 1 : 0) - (R.keys.has("l") ? 1 : 0);
     const m = Math.hypot(x, y) || 1;
-    R.vec = { x: x / m, y: y / m };
-    knob.style.transform = `translate(calc(-50% + ${R.vec.x * 110}%), calc(-50% + ${-R.vec.y * 110}%))`;
+    R.keyTarget = { x: x / m, y: y / m };
+    if (keyAnim) return;
+    keyAnim = setInterval(() => {
+      const t = R.keyTarget || { x: 0, y: 0 };
+      const k = 0.18; // easing per 40 ms ≈ full deflection in ~0.5 s
+      R.vec = { x: R.vec.x + (t.x - R.vec.x) * k, y: R.vec.y + (t.y - R.vec.y) * k };
+      if (Math.abs(t.x - R.vec.x) < 0.02) R.vec.x = t.x;
+      if (Math.abs(t.y - R.vec.y) < 0.02) R.vec.y = t.y;
+      knob.style.transform = `translate(calc(-50% + ${R.vec.x * 110}%), calc(-50% + ${-R.vec.y * 110}%))`;
+      if (!R.keys.size) { clearInterval(keyAnim); keyAnim = null; }
+    }, 40);
   }
+  const isTextField = (el) => el.matches("textarea, input:not([type]), input[type=text], input[type=password], input[type=number], input[type=search]");
   document.addEventListener("keydown", (e) => {
-    if (e.target.matches("input, textarea, select") || !R.conn?.open) return;
+    if (isTextField(e.target) || !R.conn?.open) return;
     const k = e.key.toLowerCase();
+    if (k.startsWith("arrow") && e.target.matches("select, input[type=range], input[type=checkbox], button")) e.target.blur(); // arrows always drive
     if (k === " ") { e.preventDefault(); stopAll(); return; }
     if (k === "e" && !e.repeat) { toggleExplore("explore"); return; }
     if (k === "h" && !e.repeat) { send({ t: "explore", mode: R.tel?.ex?.running ? "stop" : "home" }); return; }
     if ((k === "q" || k === "z") && !e.repeat) { const v = Math.max(0, Math.min(255, Number($("head").value) + (k === "q" ? -30 : 30))); setHead(v); return; }
     const dir = KEYS[k]; if (!dir) return;
     e.preventDefault(); if (e.repeat) return;
+    if (!R.keys.size) R.vec = { x: 0, y: 0 };
     R.keys.add(dir); keyVec(); stick.classList.add("active"); startDriveSend();
   });
   document.addEventListener("keyup", (e) => {
     const dir = KEYS[e.key.toLowerCase()]; if (!dir) return;
     R.keys.delete(dir);
-    if (!R.keys.size && R.stickPointer == null) stopDriveSend(true); else keyVec();
+    if (!R.keys.size && R.stickPointer == null) { R.keyTarget = { x: 0, y: 0 }; stopDriveSend(true); } else keyVec();
   });
   window.addEventListener("blur", () => { R.keys.clear(); if (R.sendTimer) stopDriveSend(true); });
 
@@ -609,6 +668,47 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   drawRadar();
 
   window.addEventListener("resize", drawRadar);
+  // ---- Collapsible panes (remembered per browser) ----
+  let folded = {};
+  try { folded = JSON.parse(localStorage.getItem("looi-remote-folded") || "{}"); } catch {}
+  document.querySelectorAll(".panel[data-pane]").forEach((p) => {
+    const id = p.dataset.pane, head = p.querySelector(".phead"), btn = p.querySelector(".fold");
+    const set = (c) => { p.classList.toggle("collapsed", c); btn.setAttribute("aria-expanded", String(!c)); folded[id] = c; try { localStorage.setItem("looi-remote-folded", JSON.stringify(folded)); } catch {} if (!c) { drawRadar(); applyView(); } };
+    set(!!folded[id]);
+    head.addEventListener("click", (e) => { if (e.target.closest("button:not(.fold), select, input, label")) return; set(!p.classList.contains("collapsed")); });
+  });
+
+  // ---- Listen to the phone microphone (arrives as the audio track of the phone's call) ----
+  $("btn-listen").addEventListener("click", async () => {
+    const v = $("video"), on = v.muted || !R.tel?.mic;
+    if (on) { send({ t: "mic", on: true }); v.muted = false; try { await v.play(); } catch {} $("btn-listen").textContent = "🔊 Listening"; }
+    else { v.muted = true; send({ t: "mic", on: false }); $("btn-listen").textContent = "🔈 Listen"; }
+    $("btn-listen").classList.toggle("listening", on);
+  });
+  $("btn-torch").addEventListener("click", () => send({ t: "torch", on: !R.tel?.torch?.on }));
+
+  // ---- Phone speaker ----
+  $("say-form").addEventListener("submit", (e) => { e.preventDefault(); const t = $("say-text").value.trim(); if (!t) return; send({ t: "say", text: t }); $("say-text").value = ""; });
+  document.querySelectorAll("[data-sound]").forEach((b) => b.addEventListener("click", () => send({ t: "sound", name: b.dataset.sound })));
+  let ptt = null;
+  async function pttStart(e) {
+    e?.preventDefault?.();
+    if (ptt || !R.peer || !R.conn?.open) return;
+    try {
+      const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+      ptt = { mic, call: R.peer.call(R.conn.peer, mic) };
+      $("btn-ptt").classList.add("listening"); $("btn-ptt").textContent = "🎙 Talking…";
+    } catch (err) { note("Your PC microphone is blocked: " + err.message); }
+  }
+  function pttStop() {
+    if (!ptt) return;
+    try { ptt.call.close(); } catch {}
+    ptt.mic.getTracks().forEach((t) => t.stop()); ptt = null;
+    $("btn-ptt").classList.remove("listening"); $("btn-ptt").textContent = "🎙 Hold to talk";
+  }
+  $("btn-ptt").addEventListener("pointerdown", pttStart);
+  ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => $("btn-ptt").addEventListener(ev, pttStop));
+
   if (q0) link();
 })();
 </script>
