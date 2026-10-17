@@ -1684,7 +1684,8 @@ You control a real robot on a real desk. Rules:
       const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
       const sel = $("cam-select"), keep = sel.value;
       sel.innerHTML = '<option value="">Rear camera (default)</option>' + devs.map((d, i) => `<option value="${d.deviceId}">${d.label || "Camera " + (i + 1)}</option>`).join("");
-      sel.value = keep;
+      sel.value = [...sel.options].some((o) => o.value === keep) ? keep : "";
+      if (typeof remSend === "function" && REM.conn?.open) remSend({ t: "cams", cams: camList() });
     } catch {}
   }
   async function startCamera() {
@@ -1857,10 +1858,10 @@ You control a real robot on a real desk. Rules:
   });
   $("face").addEventListener("pointercancel", () => { clearTimeout(pressTimer); pressTimer = null; });
   // ---- Face moods ----
-  //   hunt     : cruising — a curious hunting cat: narrowed green eyes, slit pupils tracking the open way, tiny pre-pounce wiggle
-  //   blocked  : stuck or scanning for a way out — red, wide round pupils searching around, head tilting, a "?"
-  //   happy    : the moment a way out is found — pleasant ^ ^ eyes for 1.5 s, then back to hunting
-  //   scared   : an edge — red, tiny pupils, trembling
+  //   hunt     : cruising — a curious hunting cat: focused lime eyes, lids slanted in, glancing toward the open way
+  //   blocked  : stuck or scanning for a way out — red, wide curious eyes searching side to side, a "?"
+  //   happy    : the moment a way out is found — yellow, cheeks up, a little laugh bounce for 1.5 s, then back to hunting
+  //   scared   : an edge — red-orange, trembling, sweat drops
   //   thinking / sleepy / calm for AI, low battery and idle
   const BLOCKED_STATES = ["scan", "peek", "pause", "backup", "escape", "turnto", "maneuver", "lifted"];
   function faceMood(now) {
@@ -1873,98 +1874,108 @@ You control a real robot on a real desk. Rules:
     if (S.battery != null && S.battery < 15 && !S.charging) return "sleepy";
     return "calm";
   }
-  const MOOD_STYLE = {
-    hunt: { iris: "#b8f53d", lid: 0.32, pupil: 0.1, glow: "#b8f53d" },
-    blocked: { iris: "#ff4d4d", lid: 0, pupil: 0.42, glow: "#ff4d4d" },
-    scared: { iris: "#ff4d4d", lid: 0, pupil: 0.12, glow: "#ff6b5b" },
-    happy: { iris: "#ffd166", lid: 0, pupil: 0, glow: "#ffd166" },
-    thinking: { iris: "#a78bfa", lid: 0.15, pupil: 0.3, glow: "#a78bfa" },
-    sleepy: { iris: "#5ff5e0", lid: 0.6, pupil: 0.3, glow: "#5ff5e0" },
-    calm: { iris: "#5ff5e0", lid: 0.08, pupil: 0.3, glow: "#5ff5e0" },
+  // ---- Face: rounded "robo eyes" with eyelid moods and colours (in the spirit of FluxGarage RoboEyes) ----
+  //   Eyelid shapes:  tired = top lids slope down to the outside · angry/focused = top lids slope down to the inside
+  //                   happy = cheeks push up from below · curiosity = the outer eye grows when looking sideways
+  //   Animations:     blink, idle glances, confused shake, laugh bounce, sweat drops when scared
+  //   Moods:          hunt (curious hunting cat while cruising) · blocked (red, curious, searching) · happy (way out found)
+  //                   scared (edge) · thinking (AI) · sleepy (low battery) · calm (idle)
+  const MOODS = {
+    hunt:     { col: [184, 245, 61],  tired: 0,   angry: 0.45, happy: 0,    h: 0.82, curious: 1 },
+    blocked:  { col: [255, 77, 77],   tired: 0,   angry: 0,    happy: 0,    h: 1.12, curious: 1.4, confused: true },
+    happy:    { col: [255, 209, 102], tired: 0,   angry: 0,    happy: 0.42, h: 1,    curious: 0, laugh: true },
+    scared:   { col: [255, 107, 91],  tired: 0.3, angry: 0,    happy: 0,    h: 1.15, curious: 0, shake: true, sweat: true },
+    thinking: { col: [167, 139, 250], tired: 0.2, angry: 0,    happy: 0,    h: 0.95, curious: 1 },
+    sleepy:   { col: [95, 245, 224],  tired: 0.6, angry: 0,    happy: 0,    h: 0.85, curious: 0 },
+    calm:     { col: [95, 245, 224],  tired: 0,   angry: 0,    happy: 0.12, h: 1,    curious: 1 },
   };
-  function drawCatEye(g, cx, cy, w, h, st, look, blink, tilt) {
-    g.save();
-    g.translate(cx, cy); g.rotate(tilt);
-    // almond outline
-    const eye = new Path2D();
-    eye.moveTo(-w / 2, 0);
-    eye.bezierCurveTo(-w * 0.25, -h * 0.75, w * 0.25, -h * 0.75, w / 2, 0);
-    eye.bezierCurveTo(w * 0.25, h * 0.75, -w * 0.25, h * 0.75, -w / 2, 0);
-    g.save();
-    g.clip(eye);
-    const grad = g.createRadialGradient(look.x * w * 0.2, look.y * h * 0.2, w * 0.05, 0, 0, w * 0.6);
-    grad.addColorStop(0, "#ffffff"); grad.addColorStop(0.25, st.iris); grad.addColorStop(1, "#0b0f12");
-    g.fillStyle = grad; g.fillRect(-w, -h, w * 2, h * 2);
-    // pupil: slit for hunting, round for curiosity
-    const pw = Math.max(w * 0.05, w * st.pupil), ph = h * (st.pupil < 0.2 ? 0.95 : 0.7);
-    g.fillStyle = "#05080a";
-    g.beginPath(); g.ellipse(look.x * w * 0.28, look.y * h * 0.2, pw / 2, ph / 2, 0, 0, Math.PI * 2); g.fill();
-    // glint
-    g.fillStyle = "rgba(255,255,255,.85)";
-    g.beginPath(); g.arc(look.x * w * 0.28 - pw * 0.6 - w * 0.04, look.y * h * 0.2 - h * 0.18, w * 0.045, 0, Math.PI * 2); g.fill();
-    // eyelids (mood squint + blink)
-    const lid = Math.min(1, st.lid + blink);
-    g.fillStyle = "#000";
-    if (lid > 0) g.fillRect(-w, -h * 0.6, w * 2, h * 1.2 * lid); // the eye spans about ±0.56 h
-    g.restore();
-    g.strokeStyle = st.glow; g.lineWidth = Math.max(2, w * 0.035); g.shadowColor = st.glow; g.shadowBlur = w * 0.18;
-    g.stroke(eye);
-    g.restore();
-  }
-  function drawHappyEye(g, cx, cy, w, col) {
-    g.save();
-    g.strokeStyle = col; g.shadowColor = col; g.shadowBlur = w * 0.25; g.lineWidth = w * 0.16; g.lineCap = "round";
-    g.beginPath(); g.arc(cx, cy + w * 0.18, w * 0.42, Math.PI * 1.12, Math.PI * 1.88); g.stroke();
-    g.restore();
-  }
+  // Smoothed values so every mood change glides instead of jumping.
+  const FS = { col: [95, 245, 224], tired: 0, angry: 0, happy: 0, h: 1, curious: 1, sweat: [] };
+  const ease = (a, b, k) => a + (b - a) * k;
+  function rr(g, x, y, w, h, r) { r = Math.max(0, Math.min(r, w / 2, h / 2)); g.beginPath(); g.roundRect(x, y, w, h, r); g.fill(); }
   function drawFace(ts) {
     if (!FACE.on) return;
     const c = $("face-canvas"), W = (c.width = innerWidth * devicePixelRatio), H = (c.height = innerHeight * devicePixelRatio);
-    const g = c.getContext("2d"), now = Date.now();
+    const g = c.getContext("2d"), now = Date.now(), t = ts / 1000;
     g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
     let mood = faceMood(now);
-    // A way out found: celebrate briefly before going back to hunting.
-    if ((FACE.mood === "blocked" || FACE.mood === "scared") && mood === "hunt") { FACE.happyUntil = now + 1500; mood = "happy"; }
-    if (FACE.mood !== mood && mood === "blocked") FACE.blockedAt = now;
+    if ((FACE.mood === "blocked" || FACE.mood === "scared") && mood === "hunt") { FACE.happyUntil = now + 1500; mood = "happy"; } // found a way out
     FACE.mood = mood;
-    const st = MOOD_STYLE[mood];
-    // Where the eyes look
-    let tx = 0, ty = 0, tilt = 0, jx = 0;
-    const t = ts / 1000;
-    if (mood === "hunt") {
-      const steer = visFresh() ? -VIS.steer : 0;
-      tx = Math.max(-1, Math.min(1, steer * 0.8 - (EX.lastTurn || 0) / 80 + Math.sin(t * 0.9) * 0.35));
-      ty = 0.15;
-      jx = Math.sin(t * 22) * W * 0.004; // pre-pounce wiggle
-    } else if (mood === "blocked") {
-      tx = Math.sin(t * 1.7) * 0.9; ty = Math.sin(t * 3.1) * 0.5; // searching around
-      tilt = Math.sin(t * 1.3) * 0.16;                           // curious head tilt
-    } else if (mood === "scared") {
-      tx = 0; ty = -0.2; jx = Math.sin(t * 60) * W * 0.008;
-    } else if (mood === "thinking") { tx = -0.6; ty = -0.7; }
+    const M = MOODS[mood];
+    // glide toward the mood's look
+    const k = 0.14;
+    FS.col = FS.col.map((v, i) => ease(v, M.col[i], 0.1));
+    FS.tired = ease(FS.tired, M.tired, k); FS.angry = ease(FS.angry, M.angry, k); FS.happy = ease(FS.happy, M.happy, k);
+    FS.h = ease(FS.h, M.h, k); FS.curious = ease(FS.curious, M.curious, k);
+    // where to look
+    let tx, ty;
+    if (mood === "hunt") { tx = Math.max(-1, Math.min(1, (visFresh() ? -VIS.steer * 0.8 : 0) - (EX.lastTurn || 0) / 70 + Math.sin(t * 0.8) * 0.25)); ty = 0.1; }
+    else if (mood === "blocked") { tx = Math.sin(t * 1.6) * 0.95; ty = Math.sin(t * 2.7) * 0.45; }
+    else if (mood === "thinking") { tx = -0.7; ty = -0.7; }
     else if (mood === "sleepy") { tx = 0; ty = 0.5; }
-    else { tx = Math.sin(t / 2.4) * 0.4; ty = Math.sin(t / 3.7) * 0.2; }
-    FACE.lookX += (tx - FACE.lookX) * (mood === "blocked" ? 0.2 : 0.12);
-    FACE.lookY += (ty - FACE.lookY) * 0.12;
-    if (ts > FACE.blinkAt) FACE.blinkAt = ts + (mood === "hunt" ? 3500 : 2200) + Math.random() * 3000;
-    const blink = mood === "happy" ? 0 : Math.max(0, 1 - Math.abs(FACE.blinkAt - ts - 70) / 70);
-    const portrait = H > W;
-    const eW = portrait ? W * 0.41 : Math.min(W * 0.22, H * 0.5);
-    const eH = eW * (mood === "blocked" || mood === "scared" ? 0.95 : 0.78);
-    const gap = portrait ? W * 0.05 : eW * 0.55;
-    const cy = H * (portrait ? 0.42 : 0.5);
-    for (const sgn of [-1, 1]) {
-      const cx = W / 2 + sgn * (eW / 2 + gap / 2) + jx;
-      if (mood === "happy") drawHappyEye(g, cx, cy, eW, st.iris);
-      else drawCatEye(g, cx, cy, eW, eH, st, { x: FACE.lookX, y: FACE.lookY }, blink, tilt * (sgn > 0 ? 1 : 1) + (mood === "blocked" ? sgn * 0.05 : 0));
+    else if (mood === "scared") { tx = 0; ty = -0.3; }
+    else { // idle glances
+      if (!FACE.idleAt || now > FACE.idleAt) { FACE.idleX = (Math.random() * 2 - 1) * 0.8; FACE.idleY = (Math.random() * 2 - 1) * 0.4; FACE.idleAt = now + 1200 + Math.random() * 2500; }
+      tx = FACE.idleX; ty = FACE.idleY;
     }
-    if (mood === "blocked") { // pulsing question mark
-      g.save(); g.fillStyle = st.iris; g.shadowColor = st.iris; g.shadowBlur = eW * 0.2;
-      g.globalAlpha = 0.6 + 0.4 * Math.sin(t * 5);
-      g.font = `700 ${Math.round(eW * 0.55)}px system-ui, sans-serif`; g.textAlign = "center";
-      g.fillText("?", W / 2 + Math.sin(t * 1.3) * eW * 0.15, cy - eH * 0.95);
+    FACE.lookX = ease(FACE.lookX, tx, mood === "blocked" ? 0.18 : 0.1);
+    FACE.lookY = ease(FACE.lookY, ty, 0.1);
+    // blink
+    if (ts > FACE.blinkAt) FACE.blinkAt = ts + 2000 + Math.random() * 3500;
+    const blink = mood === "happy" ? 0 : Math.max(0, 1 - Math.abs(FACE.blinkAt - ts - 80) / 80);
+    // geometry
+    const portrait = H > W;
+    const eW = portrait ? W * 0.38 : Math.min(W * 0.24, H * 0.55);
+    const baseH = eW * 1.05;
+    const gap = portrait ? W * 0.07 : eW * 0.35;
+    let ox = FACE.lookX * (W - (eW * 2 + gap)) * 0.42, oy = FACE.lookY * H * 0.12;
+    if (M.confused || M.shake) ox += Math.sin(t * (M.shake ? 55 : 14)) * W * (M.shake ? 0.01 : 0.018) * (M.shake || Math.sin(t * 0.9) > 0.3 ? 1 : 0);
+    if (M.laugh) oy += Math.abs(Math.sin(t * 12)) * -H * 0.025;
+    const cy = H * (portrait ? 0.44 : 0.5) + oy;
+    const col = `rgb(${FS.col.map(Math.round).join(",")})`;
+    for (const side of [-1, 1]) {
+      // curiosity: the eye on the side we're looking toward grows
+      const outer = side * FACE.lookX > 0 ? Math.abs(FACE.lookX) : 0;
+      const eh = baseH * FS.h * (1 + 0.22 * FS.curious * outer) * (1 - blink * 0.92);
+      const ex = W / 2 + side * (gap / 2 + eW / 2) + ox - eW / 2;
+      const ey = cy - eh / 2;
+      // Eyelids are cut out of the eye with clip masks, so the glow follows the lid edge.
+      g.save();
+      const P = 4 * eW; // a reach well past the glow
+      const cut = (pts) => { const m = new Path2D(); m.rect(-P, -P, W + 2 * P, H + 2 * P); m.moveTo(...pts[0]); pts.slice(1).forEach((q) => m.lineTo(...q)); m.closePath(); g.clip(m, "evenodd"); };
+      const inner = side < 0 ? ex + eW : ex, outerX = side < 0 ? ex : ex + eW; // inner = nose side
+      // Top lid: "tired" drops the outer corner, "angry/focused" drops the inner corner. The lid line runs on past the eye
+      // along its slope so the glow is trimmed cleanly.
+      if (FS.tired > 0.01 || FS.angry > 0.01) {
+        const yIn = ey + eh * FS.angry, yOut = ey + eh * FS.tired, ext = eW * 0.6, sl = (yOut - yIn) / eW;
+        const ax = inner - side * ext, ay = yIn - sl * ext, bx = outerX + side * ext, by = yOut + sl * ext;
+        cut([[ax, ay], [bx, by], [bx, ey - P], [ax, ey - P]]);
+      }
+      // happy: cheeks push up from below as a soft curve
+      if (FS.happy > 0.01) {
+        const top = ey + eh * (1 - FS.happy), pad = eW * 0.2, rim = top + eh * 0.3, m = new Path2D();
+        m.rect(-P, -P, W + 2 * P, H + 2 * P);
+        m.moveTo(ex - P, H + P); m.lineTo(ex - P, rim); m.lineTo(ex - pad, rim);
+        m.quadraticCurveTo(ex + eW / 2, top - eh * 0.3, ex + eW + pad, rim);
+        m.lineTo(ex + eW + P, rim); m.lineTo(ex + eW + P, H + P); m.closePath();
+        g.clip(m, "evenodd");
+      }
+      g.shadowColor = col; g.shadowBlur = eW * 0.22; g.fillStyle = col;
+      rr(g, ex, ey, eW, eh, eW * 0.22);
       g.restore();
     }
+    // blocked: a pulsing question mark
+    if (mood === "blocked") {
+      g.save(); g.fillStyle = col; g.shadowColor = col; g.shadowBlur = eW * 0.2; g.globalAlpha = 0.55 + 0.45 * Math.sin(t * 5);
+      g.font = `700 ${Math.round(eW * 0.5)}px system-ui, sans-serif`; g.textAlign = "center";
+      g.fillText("?", W / 2 + ox, cy - baseH * 0.78); g.restore();
+    }
+    // scared: sweat drops
+    if (M.sweat) {
+      if (FS.sweat.length < 3 && Math.random() < 0.05) FS.sweat.push({ x: Math.random() * W, y: H * 0.05, v: H * 0.004 });
+      g.fillStyle = "rgba(120,190,255,.85)";
+      FS.sweat = FS.sweat.filter((d) => { d.y += d.v; g.beginPath(); g.ellipse(d.x, d.y, W * 0.012, W * 0.02, 0, 0, Math.PI * 2); g.fill(); return d.y < H * 0.4; });
+    } else FS.sweat = [];
     $("face-status").textContent = `${S.battery != null ? S.battery + "%" : ""}${S.charging ? " ⚡" : ""}${EX.running ? " · exploring" : ""}${REM.peer && !REM.conn?.open ? " · remote code " + REM.code : REM.conn?.open ? " · PC linked" : ""}`;
     FACE.raf = requestAnimationFrame(drawFace);
   }
@@ -2208,7 +2219,7 @@ You control a real robot on a real desk. Rules:
       c.on("open", () => {
         remStatus("PC connected", "ok");
         log("sys", "Remote: PC connected.");
-        remSend({ t: "hello", code: REM.code, settings: Object.fromEntries(REMOTE_SETTINGS.filter((id) => $(id)).map((id) => [id, $(id).type === "checkbox" ? $(id).checked : $(id).value])), cams: [...$("cam-select").options].map((o) => ({ id: o.value, label: o.textContent })), profile: TR.profile });
+        remSend({ t: "hello", code: REM.code, settings: Object.fromEntries(REMOTE_SETTINGS.filter((id) => $(id)).map((id) => [id, $(id).type === "checkbox" ? $(id).checked : $(id).value])), cams: camList(), profile: TR.profile });
         remCallVideo();
         clearInterval(REM.telTimer); REM.telTimer = setInterval(remTelemetry, 250);
       });
@@ -2258,6 +2269,14 @@ You control a real robot on a real desk. Rules:
     remSend({ t: "video", on: !!VIS.stream?.active });
   }
 
+  // The phone's own battery (Battery Status API; Chrome on Android supports it).
+  const PBAT = { level: null, charging: false };
+  navigator.getBattery?.().then((b) => {
+    const up = () => { PBAT.level = Math.round(b.level * 100); PBAT.charging = b.charging; };
+    up(); b.addEventListener("levelchange", up); b.addEventListener("chargingchange", up);
+  }).catch(() => {});
+  const camList = () => [...$("cam-select").options].map((o) => ({ id: o.value, label: o.textContent }));
+
   function remTelemetry() {
     if (!REM.conn?.open) return;
     remSend({
@@ -2269,6 +2288,7 @@ You control a real robot on a real desk. Rules:
       cam: VIS.running, face: FACE.on, mic: !!AUD.mic?.active, torch: TORCH, mood: FACE.mood, ai: { busy: AI.busy, key: !!$("ai-key").value.trim(), auto: !!AI.autoTimer },
       remoteDriving: !!REM.driveTimer, latch: REM.latch, safetyOff: !!REM.safetyOff,
       view: { rot: Number($("vis-rot").value) || 0, mirror: $("vis-mirror").checked },
+      phone: PBAT, camId: $("cam-select").value, camLabel: VIS.stream?.getVideoTracks()[0]?.label || null,
       fused: fusedCols(), nav: navTelemetry((REM.telN = (REM.telN || 0) + 1) % 4 === 0), echo: ECHO.mm,
     });
   }

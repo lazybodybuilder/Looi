@@ -122,7 +122,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     <div class="status">
       <span class="chip" id="st-link">Not linked</span>
       <span class="chip" id="st-ble">Robot —</span>
-      <span class="chip" id="st-batt">Battery —</span>
+      <span class="chip" id="st-batt">Robot battery —</span>
+      <span class="chip" id="st-pbatt">Phone —</span>
     </div>
   </header>
 
@@ -151,6 +152,11 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
               <button id="btn-torch" title="Phone flashlight">Flashlight</button>
               <button id="btn-face" title="LOOI's face on the cover screen">Face on</button>
             </div>
+            <div class="row">
+              <button id="btn-cam">Camera on</button>
+              <select id="cam-select" aria-label="Phone camera" style="flex: 1; min-width: 0;"><option value="">Rear camera (default)</option></select>
+              <button id="btn-cam-next" title="Switch to the phone's next camera">Next camera ⇄</button>
+            </div>
           </div>
           <div class="view-bar">
             <p class="hint legend"><i class="sw ok"></i> open floor <i class="sw bad"></i> obstacle within reach <i class="sw box"></i> most open direction · numbers = estimated distance</p>
@@ -178,10 +184,6 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
               <button class="primary" id="btn-explore">Explore</button>
               <button id="btn-imitate">Drive like me</button>
               <button id="btn-reconnect">Reconnect robot</button>
-            </div>
-            <div class="row">
-              <button id="btn-cam">Camera on</button>
-              <select id="cam-select" aria-label="Phone camera"><option value="">Rear camera (default)</option></select>
             </div>
           </div>
         </section>
@@ -371,7 +373,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     R.conn = null; R.peer = null; R.tel = null;
     $("video").srcObject = null; $("video-empty").hidden = false;
     $("btn-unpair").disabled = true; $("btn-pair").disabled = false; $("btn-stop").disabled = true;
-    chip("st-link", "Not linked"); chip("st-ble", "Robot —"); chip("st-batt", "Battery —");
+    chip("st-link", "Not linked"); chip("st-ble", "Robot —"); chip("st-batt", "Robot battery —"); chip("st-pbatt", "Phone —");
     if (msg) addLog("sys", msg);
   }
 
@@ -386,11 +388,11 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
         if (v == null) return;
         if (el.type === "checkbox") el.checked = !!v; else el.value = v;
       });
-      const sel = $("cam-select");
-      sel.innerHTML = (d.cams || []).map((c) => `<option value="${c.id}">${c.label}</option>`).join("") || '<option value="">Rear camera (default)</option>';
+      setCams(d.cams);
       $("btn-imitate").disabled = !d.profile;
       return;
     }
+    if (d.t === "cams") return setCams(d.cams);
     if (d.t === "tel") return showTel(d);
     if (d.t === "log") return addLog(d.kind, d.line);
     if (d.t === "chat") return addChat(d.kind, d.text);
@@ -398,6 +400,13 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     if (d.t === "video" && !d.on) { $("video").srcObject = null; $("video-empty").hidden = false; $("video-empty").textContent = "Camera is off on the phone. Press Camera on."; }
   }
 
+  // Phone camera list. The phone only learns camera names after its camera has started once, so it resends the list then.
+  function setCams(list) {
+    const sel = $("cam-select"), keep = sel.value;
+    sel.replaceChildren(...(list?.length ? list : [{ id: "", label: "Rear camera (default)" }]).map((c) => new Option(c.label || "Camera", c.id)));
+    sel.value = [...sel.options].some((o) => o.value === keep) ? keep : "";
+    $("btn-cam-next").disabled = sel.options.length < 3; // the default entry plus at least two real cameras
+  }
   function showTel(d) {
     R.tel = d;
     if (d.view && (d.view.rot !== VIEW.deg || d.view.mirror !== VIEW.mirror)) { VIEW.deg = d.view.rot; VIEW.mirror = d.view.mirror; applyView(); }
@@ -409,7 +418,10 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     $("nav-home-go").disabled = !d.nav?.home;
     const S = d.S || {};
     chip("st-ble", d.ble ? `Robot · ${d.name || "LOOI"}` : "Robot disconnected", d.ble ? "ok" : "bad");
-    if (S.battery != null) chip("st-batt", `Battery ${S.battery}%${S.charging ? " ⚡" : ""}`, S.battery > 20 ? "ok" : "warn");
+    if (S.battery != null) chip("st-batt", `Robot battery ${S.battery}%${S.charging ? " ⚡" : ""}`, S.battery > 20 ? "ok" : "warn");
+    if (d.phone?.level != null) chip("st-pbatt", `Phone ${d.phone.level}%${d.phone.charging ? " ⚡" : ""}`, d.phone.level > 20 || d.phone.charging ? "ok" : "warn");
+    else if (d.phone) chip("st-pbatt", "Phone battery n/a");
+    if (d.camId != null && document.activeElement !== $("cam-select") && [...$("cam-select").options].some((o) => o.value === d.camId)) $("cam-select").value = d.camId;
     const dist = S.dist == null ? "—" : S.dist === 0xffff ? "clear (over 85 cm)" : `${S.dist} mm${S.eff >= 900 && S.dist !== 0xffff ? " (filtered)" : ""}`;
     $("t-dist").textContent = dist;
     $("t-vis").textContent = d.vis ? `${Math.round(d.vis.center * 100)}% free ahead · ${d.vis.fps} fps` : d.cam ? "warming up" : "camera off";
@@ -540,6 +552,13 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   $("btn-imitate").addEventListener("click", () => toggleExplore("imitate"));
   $("btn-reconnect").addEventListener("click", () => send({ t: "reconnect" }));
   $("btn-cam").addEventListener("click", () => send({ t: "camera", on: !R.tel?.cam, deviceId: $("cam-select").value || null }));
+  $("btn-cam-next").addEventListener("click", () => {
+    const sel = $("cam-select"), real = [...sel.options].filter((o) => o.value);
+    if (!real.length) return;
+    const i = real.findIndex((o) => o.value === sel.value);
+    sel.value = real[(i + 1) % real.length].value;
+    send({ t: "camera", on: true, deviceId: sel.value });
+  });
   $("cam-select").addEventListener("change", () => { if (R.tel?.cam) send({ t: "camera", on: true, deviceId: $("cam-select").value || null }); });
   $("btn-face").addEventListener("click", () => send({ t: "face", on: !R.tel?.face }));
   $("btn-light").addEventListener("click", () => send({ t: "light", on: !R.tel?.S?.light }));

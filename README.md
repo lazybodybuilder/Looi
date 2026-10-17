@@ -16,9 +16,9 @@ A single-page controller for the TangibleFuture LOOI desk robot. It talks straig
 - **Eyes**: rear-camera free-floor detection that steers Explore (it only triggers avoidance within the *Camera reacts within* distance, 300 mm by default), a head-tilt "second look" when camera and distance disagree, and a full-screen face for the Flip's cover screen
 - **Sensor fusion**: the camera learns to judge distance from the distance sensor (per head tilt), giving each of 9 columns a distance estimate; the distance sensor overrides the centre and the close-range sensor confirms contact
 - **Map & home**: dead-reckoned position from every drive command, a live radar with obstacle points, the last 5 minutes of path, Set home / Go home
-- **Cat face**: hunting cat while cruising, red and curious when blocked, a happy burst when it finds a way out, scared at edges
+- **Robo eyes face** (in the style of [FluxGarage RoboEyes](https://github.com/FluxGarage/RoboEyes)): rounded glowing eyes with eyelid moods, blinks, glances and colours that glide between moods. Lime and focused while hunting, red and curious with a "?" when blocked, yellow happy cheeks when it finds a way out, trembling with sweat drops at edges, purple when the AI is thinking, tired teal on low battery
 - **Audio & light**: listen to the phone's microphone, talk through its speaker (hold to talk), make it say things or play sounds, toggle the flashlight
-- **Remote console**: live camera with vision overlay, telemetry, joystick, Explore, AI chat and settings from a PC browser. Rotate or mirror the video to match how the phone sits. Remote driving keeps a 300 ms deadman (if the PC goes quiet, it stops). The forward block and edge stop can be switched off with **Safety off** on the PC; they come back on when the PC disconnects
+- **Remote console**: live camera with vision overlay, telemetry, joystick, Explore, AI chat and settings from a PC browser. Rotate or mirror the video and switch between the phone's cameras. The header shows the robot's and the phone's battery. Remote driving keeps a 300 ms deadman (if the PC goes quiet, it stops). The forward block and edge stop can be switched off with **Safety off** on the PC; they come back on when the PC disconnects
 
 ## Run on the phone (Galaxy Z Flip 4 on LOOI)
 1. Force-stop the official LOOI app so it releases Bluetooth.
@@ -26,7 +26,7 @@ A single-page controller for the TangibleFuture LOOI desk robot. It talks straig
    Narrow screens show a compact layout with just **Connect LOOI** and the pairing code.
 3. Tap **Connect LOOI** and pick the robot. This is the only tap needed on the phone.
 4. On the PC, open **remote.html**, type the 6-letter code, and press Connect.
-5. From the PC: **Camera on** (choose the ultra-wide if listed), **Face on**, then drive, **Explore** or talk to the AI.
+5. From the PC: **Camera on** (pick a camera from the list or press **Next camera**; the full list appears after the camera has started once), **Face on**, then drive, **Explore** or talk to the AI.
 6. Mount the folded phone with the cover screen and rear cameras facing forward.
 
 Face screen gestures: press and hold to start/stop exploring, double-tap to exit.
