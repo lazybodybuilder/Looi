@@ -1,5 +1,7 @@
 # LOOI Bench Console
 
+*Looi Robot infected by Venom.*
+
 A single-page controller for the TangibleFuture LOOI desk robot. It talks straight to the robot over Web Bluetooth, so you don't need the official app.
 
 **Live:** https://lazybodybuilder.github.io/Looi/
