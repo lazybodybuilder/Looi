@@ -1,0 +1,1769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LOOI Bench Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: bench instrument — status strip on top, control panels in a wrapping grid, BLE log as a full-width tape at the bottom. */
+:root {
+  --bg: #eef1f3;
+  --panel: #ffffff;
+  --line: #d5dce1;
+  --fg: #17212b;
+  --muted: #5d6b78;
+  --accent: #0b8f84;
+  --accent-ink: #ffffff;
+  --warn: #b26a00;
+  --bad: #c0392b;
+  --good: #1f8a4c;
+  --tape: #f6f8f9;
+  --hi: #ffe9a8;
+  --f-display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f151a; --panel: #172028; --line: #273340; --fg: #e3e9ee; --muted: #8b9aa8;
+    --accent: #2fc4b4; --accent-ink: #062320; --warn: #f0a63a; --bad: #ff6b5b; --good: #4cd38a;
+    --tape: #111a20; --hi: #5a4a12; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f151a; --panel: #172028; --line: #273340; --fg: #e3e9ee; --muted: #8b9aa8;
+  --accent: #2fc4b4; --accent-ink: #062320; --warn: #f0a63a; --bad: #ff6b5b; --good: #4cd38a;
+  --tape: #111a20; --hi: #5a4a12; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg); font: 15px/1.5 var(--f-body);
+  padding: 16px; padding-block: max(16px, env(safe-area-inset-top, 0px)) 32px;
+}
+.wrap { max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; }
+h1, h2 { font-family: var(--f-display); font-weight: 600; margin: 0; text-wrap: balance; }
+h1 { font-size: 1.5rem; letter-spacing: .02em; }
+h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+.mono, code, input.hex, select, .log { font-family: var(--f-mono); }
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.sub { color: var(--muted); font-size: .9rem; margin: 2px 0 0; }
+.status { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel); font: 500 .8rem var(--f-mono); color: var(--muted);
+}
+.chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.chip.ok { color: var(--fg); } .chip.ok::before { background: var(--good); }
+.chip.warn::before { background: var(--warn); } .chip.bad::before { background: var(--bad); }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button {
+  font: 600 .9rem var(--f-body); border-radius: 8px; border: 1px solid var(--line);
+  background: var(--tape); color: var(--fg); padding: 9px 14px; cursor: pointer; touch-action: manipulation;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.stop { background: var(--bad); color: #fff; border-color: var(--bad); }
+.stick-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.stick { position: relative; width: min(240px, 100%); aspect-ratio: 1; max-width: 100%; border-radius: 50%; background: var(--tape); border: 1px solid var(--line); touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+.stick[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.stick.active { border-color: var(--accent); cursor: grabbing; }
+.stick .ring { position: absolute; inset: 22%; border-radius: 50%; border: 1px dashed var(--line); pointer-events: none; }
+.stick::before, .stick::after { content: ""; position: absolute; background: var(--line); pointer-events: none; }
+.stick::before { left: 50%; top: 8%; bottom: 8%; width: 1px; }
+.stick::after { top: 50%; left: 8%; right: 8%; height: 1px; }
+.axis-label { position: absolute; font: 500 .7rem var(--f-mono); color: var(--muted); letter-spacing: .08em; pointer-events: none; }
+.axis-label.t { top: 6px; left: 50%; transform: translateX(-50%); } .axis-label.b { bottom: 6px; left: 50%; transform: translateX(-50%); }
+.axis-label.l { left: 8px; top: 50%; transform: translateY(-50%); } .axis-label.r { right: 8px; top: 50%; transform: translateY(-50%); }
+.knob { position: absolute; left: 50%; top: 50%; width: 30%; aspect-ratio: 1; border-radius: 50%; transform: translate(-50%, -50%); background: var(--panel); border: 2px solid var(--muted); box-shadow: 0 2px 8px rgba(0,0,0,.18); pointer-events: none; }
+.stick.active .knob { background: var(--accent); border-color: var(--accent); }
+#btn-stop { min-width: 140px; }
+.hint { color: var(--muted); font-size: .82rem; margin: 0; }
+label { font-size: .85rem; color: var(--muted); display: grid; gap: 4px; }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+input.hex, select, input[type="number"] {
+  width: 100%; min-width: 0; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--tape); color: var(--fg); font-size: .9rem;
+}
+.field-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: .88rem; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-family: var(--f-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.bytes { display: flex; flex-wrap: wrap; gap: 4px; font: .85rem var(--f-mono); }
+.bytes span { padding: 3px 5px; border-radius: 4px; background: var(--tape); border: 1px solid var(--line); min-width: 2.6em; text-align: center; transition: background .4s; }
+.bytes span.changed { background: var(--hi); }
+.bytes small { display: block; font-size: .65rem; color: var(--muted); }
+.chars { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.chars td, .chars th { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+.chars th { color: var(--muted); font-weight: 500; }
+.scroll { overflow-x: auto; }
+.log {
+  background: var(--tape); border: 1px solid var(--line); border-radius: 8px; padding: 10px; height: 260px;
+  overflow: auto; font-size: .8rem; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0;
+}
+.log .tx { color: var(--accent); } .log .rx { color: var(--fg); } .log .err { color: var(--bad); } .log .sys { color: var(--muted); }
+.banner { border: 1px solid var(--warn); border-radius: 10px; padding: 12px 14px; background: var(--panel); font-size: .9rem; }
+.banner[hidden] { display: none; }
+.toggle { display: flex; align-items: center; gap: 6px; font-size: .85rem; color: var(--fg); }
+.ai-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+@media (max-width: 760px) { .ai-grid { grid-template-columns: 1fr; } }
+.ai-settings { display: grid; gap: 10px; align-content: start; min-width: 0; }
+textarea { width: 100%; min-width: 0; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--tape); color: var(--fg); font: .88rem/1.45 var(--f-body); resize: vertical; }
+.ai-chat { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.chat { background: var(--tape); border: 1px solid var(--line); border-radius: 8px; padding: 10px; height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.msg { max-width: 85%; padding: 7px 10px; border-radius: 10px; font-size: .9rem; overflow-wrap: anywhere; }
+.msg.you { align-self: flex-end; background: var(--accent); color: var(--accent-ink); }
+.msg.looi { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+.msg.act { align-self: flex-start; font: .76rem var(--f-mono); color: var(--muted); padding: 2px 4px; }
+.msg.sys { align-self: center; color: var(--muted); font-size: .82rem; text-align: center; }
+.msg.err { align-self: center; color: var(--bad); font-size: .85rem; }
+.ai-input { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; }
+#ai-mic.listening { background: var(--bad); color: #fff; border-color: var(--bad); }
+.ex-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+@media (max-width: 760px) { .ex-grid { grid-template-columns: 1fr; } }
+.ex-controls { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.ex-fields { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items: end; }
+.ex-radar { display: grid; gap: 10px; justify-items: center; align-content: start; min-width: 0; }
+.ex-radar canvas { width: 260px; max-width: 100%; aspect-ratio: 1; border-radius: 50%; background: var(--tape); border: 1px solid var(--line); }
+.ex-radar .kv { width: 100%; }
+.steps { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; font-size: .88rem; color: var(--muted); }
+.steps b { color: var(--fg); }
+.ai-note { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--tape); border: 1px solid var(--line); font-size: .9rem; }
+.hist { width: 100%; display: grid; gap: 6px; }
+#ex-history { margin: 0; padding-left: 1.4em; font-size: .84rem; display: grid; gap: 2px; }
+button.stop#tr-rec { background: var(--bad); color: #fff; border-color: var(--bad); }
+button.mini { padding: 2px 8px; font-size: .75rem; }
+.cam-view { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.cam-wrap { position: relative; width: 100%; aspect-ratio: 4 / 3; background: var(--tape); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.cam-wrap video, .cam-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+#face { position: fixed; inset: 0; z-index: 50; background: #000; touch-action: manipulation; }
+#face canvas { width: 100%; height: 100%; display: block; }
+#face-status { position: absolute; left: 0; right: 0; bottom: max(8px, env(safe-area-inset-bottom, 0px)); text-align: center; color: #5ff5e0; font: 500 .8rem var(--f-mono); opacity: .7; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>LOOI Bench Console</h1>
+      <p class="sub">Direct Bluetooth control of the LOOI base — no official app needed.</p>
+    </div>
+    <div class="status">
+      <span class="chip" id="st-ble">Disconnected</span>
+      <span class="chip" id="st-hs">Handshake —</span>
+      <span class="chip" id="st-dock">Dock —</span>
+      <span class="chip" id="st-charge">Charger —</span>
+      <span class="chip" id="st-batt">Battery —</span>
+    </div>
+  </header>
+
+  <div class="banner" id="nobt" hidden>
+    Web Bluetooth isn't available here. Open this file in Chrome or Edge on a laptop, or in Chrome on Android.
+    Safari and Firefox don't support it. If Chrome refuses on a <code>file://</code> page, serve the folder with
+    <code>python3 -m http.server</code> and open <code>http://localhost:8000/looi-console.html</code>.
+  </div>
+
+  <section class="panel">
+    <div class="row">
+      <button class="primary" id="btn-connect">Connect LOOI</button>
+      <button id="btn-disconnect" disabled>Disconnect</button>
+      <button id="btn-handshake" disabled>Replay handshake</button>
+      <label class="toggle"><input type="checkbox" id="opt-any"> Show all BLE devices</label>
+    </div>
+    <p class="hint">Close the official LOOI app first (swipe it away), otherwise it holds the connection. Power LOOI on, then Connect and pick "LOOI Robot".</p>
+  </section>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Drive</h2>
+      <div class="stick-wrap">
+        <div class="stick" id="stick" role="application" aria-label="Drive joystick" aria-disabled="true">
+          <span class="ring"></span>
+          <span class="axis-label t">FWD</span><span class="axis-label b">BACK</span><span class="axis-label l">L</span><span class="axis-label r">R</span>
+          <span class="knob" id="knob"></span>
+        </div>
+        <button class="stop" id="btn-stop" disabled>STOP</button>
+      </div>
+      <p class="mono hint" id="stick-read">fwd +0 · turn +0 → 00 00</p>
+      <p class="hint">Drag the knob in any direction: up/down is speed, sideways is turn, diagonals curve. Let go to stop. Keyboard: WASD or arrows (combine for curves), Space to stop.</p>
+      <div class="field-row">
+        <label>Repeat interval (ms)<input type="number" id="opt-interval" value="50" min="20" max="500" step="10"></label>
+        <label>Max drive time (s)<input type="number" id="opt-maxhold" value="8" min="1" max="60" step="1"></label>
+      </div>
+      <label>Speed <span class="mono" id="speed-val">60 / 127</span>
+        <input type="range" id="opt-speed" min="10" max="127" value="60">
+      </label>
+      <label class="toggle"><input type="checkbox" id="opt-classic"> Use original sniffed payloads (ignores speed)</label>
+      <p class="hint">Speed mode treats FED0 as a joystick: byte 0 = forward/back, byte 1 = turn, both signed −127…127. This is a hypothesis from the sniffed values, so start low.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Head &amp; light</h2>
+      <label>Neck position <span class="mono" id="head-val">0x87 (135)</span>
+        <input type="range" id="head" min="0" max="255" value="135" disabled>
+      </label>
+      <div class="row">
+        <button data-head="0" disabled>Up · 00</button>
+        <button data-head="135" disabled>Centre · 87</button>
+        <button data-head="255" disabled>Down · FF</button>
+      </div>
+      <div class="row">
+        <button id="btn-light-on" disabled>Light on</button>
+        <button id="btn-light-off" disabled>Light off</button>
+      </div>
+      <p class="hint">The slider sends any value 0–255 to FED1. Only 00, 87 and FF are confirmed — the in-between values are yours to map.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Sensor stream · FED9</h2>
+      <dl class="kv">
+        <dt>Last packet</dt><dd id="s-last">—</dd>
+        <dt>Length</dt><dd id="s-len">—</dd>
+        <dt>Packets</dt><dd id="s-count">0</dd>
+        <dt>Dock</dt><dd id="s-dock">—</dd>
+        <dt>Front distance (0x0E)</dt><dd id="s-dist">—</dd>
+        <dt>Ground sensors (0x01)</dt><dd id="s-cliff">—</dd>
+        <dt>Charger (0x0B)</dt><dd id="s-charge">—</dd>
+        <dt>Battery</dt><dd id="s-batt">—</dd>
+      </dl>
+      <table class="chars" id="s-types"><thead><tr><th>Type</th><th>Value (uint16 LE)</th><th>Min</th><th>Max</th><th>Count</th></tr></thead><tbody></tbody></table>
+      <div class="bytes" id="s-bytes"></div>
+      <p class="hint">Bytes that changed since the previous packet of the same type flash yellow. Lift LOOI, put a hand in front of it, or dock/undock the phone and watch which byte moves — that's how the cliff, distance and battery fields get decoded.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Raw write</h2>
+      <label>Characteristic<select id="raw-char" disabled></select></label>
+      <label>Payload (hex)<input class="hex" id="raw-hex" spellcheck="false" autocomplete="off" value="00 07 00 FF 05 00 00 00 00 64 02 0A 96 02 14 00 02"></label>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="raw-resp" checked> With response</label>
+        <label class="toggle"><input type="checkbox" id="raw-seq" checked> Auto-increment byte 0 (FE00 sequence)</label>
+        <label class="toggle"><input type="checkbox" id="raw-risky"> Allow writes to FED3 / FEDF</label>
+      </div>
+      <div class="row">
+        <button class="primary" id="btn-raw" disabled>Send</button>
+        <button id="btn-read" disabled>Read value</button>
+        <button id="btn-readall" disabled>Read all readable</button>
+      </div>
+      <label>Presets
+        <select id="raw-preset">
+          <option value="">Choose a known packet…</option>
+          <option value="fe00|00 07 00 FF 05 00 00 00 00 64 02 0A 96 02 14 00 02">FE00 · rotate + red LED (SOOPERCHARGE)</option>
+          <option value="fe00|00 10 00 00 01 00 32 03 0a 00 01 ff 00 01 0a 32 03 ff 00 03">FE00 · SDK example frame (20 bytes)</option>
+          <option value="fed0|77 07">FED0 · forward pulse</option>
+          <option value="fed0|00 00">FED0 · stop</option>
+          <option value="fed2|03">FED2 · torch 03 (SOOPERCHARGE value)</option>
+        </select>
+      </label>
+    </section>
+  </div>
+
+  <section class="panel" id="vision-panel">
+    <div class="row" style="justify-content: space-between;">
+      <h2>Eyes · camera vision &amp; face</h2>
+      <span class="chip" id="st-cam">Camera off</span>
+    </div>
+    <div class="ex-grid">
+      <div class="ex-controls">
+        <div class="row">
+          <button class="primary" id="cam-start">Start camera</button>
+          <button id="cam-stop" disabled>Stop camera</button>
+          <button id="face-btn">Face mode</button>
+        </div>
+        <label>Camera<select id="cam-select"><option value="">Rear camera (default)</option></select></label>
+        <div class="ex-fields">
+          <label>Blocked when free floor below (%)<input type="number" id="vis-block" value="30" min="5" max="80" step="5"></label>
+          <label>Floor match tolerance<input type="number" id="vis-tol" value="0.09" min="0.02" max="0.3" step="0.01"></label>
+          <label>Camera field of view (°)<input type="number" id="vis-fov" value="70" min="40" max="130" step="5"></label>
+        </div>
+        <div class="row">
+          <label class="toggle"><input type="checkbox" id="vis-steer" checked> Steer Explore with the camera</label>
+          <label class="toggle"><input type="checkbox" id="vis-ai" checked> Let the AI pilot see</label>
+        </div>
+        <p class="hint">How it works: LOOI learns what the floor looks like from the patch right in front of it, then checks each of 9 columns for how far up the image the floor reaches. Tall green bars mean open space, short red bars mean something is in the way (an obstacle, or the desk edge). The distance and cliff sensors still have the final say. Use the ultra-wide rear camera if it's listed, and set the field of view to about 110°.</p>
+        <p class="hint"><b>Face mode</b> fills the screen with LOOI's eyes, sized for the cover screen. The eyes look where LOOI is heading, react to obstacles, and blink. Double-tap to exit.</p>
+      </div>
+      <div class="cam-view">
+        <div class="cam-wrap">
+          <video id="cam-video" playsinline muted></video>
+          <canvas id="cam-overlay"></canvas>
+        </div>
+        <dl class="kv">
+          <dt>Free ahead</dt><dd id="vis-center">—</dd>
+          <dt>Best way</dt><dd id="vis-best">—</dd>
+          <dt>Vision rate</dt><dd id="vis-fps">—</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <div id="face" hidden>
+    <canvas id="face-canvas"></canvas>
+    <div id="face-status"></div>
+  </div>
+
+  <section class="panel" id="explore-panel">
+    <div class="row" style="justify-content: space-between;">
+      <h2>Explore mode · runs locally, no AI calls</h2>
+      <span class="chip" id="st-explore">Explore off</span>
+    </div>
+    <div class="ex-grid">
+      <div class="ex-controls">
+        <div class="row">
+          <button class="primary" id="ex-start" disabled>Start exploring</button>
+          <button id="ex-stop" disabled>Stop</button>
+          <button id="ex-cal" disabled>Test 360° spin</button>
+        </div>
+        <div class="ex-fields">
+          <label>Cruise speed<input type="number" id="ex-cruise" value="45" min="15" max="100" step="5"></label>
+          <label>Turn speed<input type="number" id="ex-turn" value="50" min="20" max="100" step="5"></label>
+          <label>Obstacle stop (mm)<input type="number" id="ex-stopdist" value="180" min="80" max="500" step="10"></label>
+          <label>Time for one 360° (ms)<input type="number" id="ex-spin" value="6000" min="800" max="10000" step="100"></label>
+          <label>Dark below (0x02)<input type="number" id="ex-dark" value="15000" min="0" max="65535" step="1000"></label>
+          <label>Bright above (0x02)<input type="number" id="ex-bright" value="40000" min="0" max="65535" step="1000"></label>
+          <label>Run for up to (min)<input type="number" id="ex-mins" value="10" min="1" max="60" step="1"></label>
+          <label class="toggle"><input type="checkbox" id="ex-lights" checked> Light on in the dark</label>
+        </div>
+        <p class="hint">Calibrate first: press <b>Test 360° spin</b> and adjust "Time for one 360°" until LOOI ends facing where it started. The scan map depends on it. Keep this tab in front while exploring; the browser slows background tabs, so exploring stops if you switch away.</p>
+      </div>
+      <div class="ex-radar">
+        <canvas id="ex-canvas" width="260" height="260" aria-label="Last 360° scan"></canvas>
+        <dl class="kv">
+          <dt>State</dt><dd id="ex-state">—</dd>
+          <dt>Last event</dt><dd id="ex-event">—</dd>
+          <dt>Distance</dt><dd id="ex-dist">—</dd>
+          <dt>Light level</dt><dd id="ex-light">—</dd>
+          <dt>Scans · edges</dt><dd id="ex-counts">0 · 0</dd>
+          <dt>Self-echo filter</dt><dd><span id="ex-echo">off</span> <button id="ex-echo-reset" class="mini" hidden>Reset</button></dd>
+        </dl>
+        <div class="hist">
+          <h2>Last 6 legs · heading, time, why it ended</h2>
+          <ol id="ex-history"><li class="hint">No legs yet.</li></ol>
+          <p class="hint">Headings are estimated from turn time (no compass), so they drift. After a scan, LOOI avoids directions it drove in recently and the way it just came from.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="train-panel">
+    <div class="row" style="justify-content: space-between;">
+      <h2>Training wheels · learn my driving</h2>
+      <span class="chip" id="st-train">No style learned</span>
+    </div>
+    <div class="ex-grid">
+      <div class="ex-controls">
+        <ol class="steps">
+          <li><b>Record</b> yourself driving with the joystick for 1–3 minutes. Cruise around, and steer away from obstacles the way you like: early or late, arcing or stopping to turn, left or right.</li>
+          <li><b>Learn my style</b> turns the recording into a driving profile.</li>
+          <li><b>Drive like me</b> runs that profile on its own. The obstacle stop distance, edge escape and lift detection from Explore always apply on top, and grabbing the joystick hands control back to you.</li>
+        </ol>
+        <div class="row">
+          <button class="primary" id="tr-rec" disabled>Record my driving</button>
+          <button id="tr-learn" disabled>Learn my style</button>
+          <button class="primary" id="tr-run" disabled>Drive like me</button>
+        </div>
+        <div class="row">
+          <button id="tr-ai" disabled>Ask AI to describe my style</button>
+          <button id="tr-reset">Forget style</button>
+        </div>
+        <p class="hint" id="tr-status">Nothing recorded yet.</p>
+        <p class="ai-note" id="tr-ai-text" hidden></p>
+      </div>
+      <div>
+        <dl class="kv" id="tr-profile">
+          <dt>Cruise speed</dt><dd id="tp-cruise">—</dd>
+          <dt>Curviness</dt><dd id="tp-curve">—</dd>
+          <dt>Reacts at</dt><dd id="tp-react">—</dd>
+          <dt>Avoidance style</dt><dd id="tp-style">—</dd>
+          <dt>Turn side</dt><dd id="tp-side">—</dd>
+          <dt>Turn speed · time</dt><dd id="tp-turn">—</dd>
+          <dt>Learned from</dt><dd id="tp-from">—</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel ai" id="ai-panel">
+    <div class="row" style="justify-content: space-between;">
+      <h2>AI pilot · OpenAI</h2>
+      <span class="chip" id="st-ai">AI idle</span>
+    </div>
+    <div class="ai-grid">
+      <div class="ai-settings">
+        <label>OpenAI API key<input class="hex" type="password" id="ai-key" autocomplete="off" spellcheck="false" placeholder="sk-…"></label>
+        <label class="toggle"><input type="checkbox" id="ai-remember"> Remember key in this browser</label>
+        <label>Model<input class="hex" id="ai-model" value="gpt-4o-mini" spellcheck="false"></label>
+        <label>Personality
+          <textarea id="ai-persona" rows="3">You are LOOI, a small curious desk robot with tank tracks and a phone for a face. You are playful, warm and brief. You live on Akshay's desk.</textarea>
+        </label>
+        <div class="field-row">
+          <label>AI max speed<input type="number" id="ai-maxspeed" value="50" min="10" max="100" step="5"></label>
+          <label>Stop distance (mm)<input type="number" id="ai-mindist" value="150" min="60" max="400" step="10"></label>
+        </div>
+        <div class="row">
+          <label class="toggle"><input type="checkbox" id="ai-speak" checked> Speak replies</label>
+          <label class="toggle"><input type="checkbox" id="ai-auto"> Autonomous mode</label>
+        </div>
+        <p class="hint">Autonomous mode lets LOOI decide on its own every 10 seconds, for at most 5 minutes. Every move still goes through the safety checks. STOP cancels everything.</p>
+      </div>
+      <div class="ai-chat">
+        <div class="chat" id="ai-chat" aria-live="polite">
+          <div class="msg sys">Connect LOOI, paste your OpenAI key, then say hi. Try "come towards me slowly", "look up and turn on your light" or "what's your battery?"</div>
+        </div>
+        <form class="ai-input" id="ai-form">
+          <input class="hex" id="ai-text" autocomplete="off" placeholder="Talk to LOOI…">
+          <button type="button" id="ai-mic" title="Hold a conversation by voice">🎙</button>
+          <button class="primary" type="submit" id="ai-send">Send</button>
+        </form>
+        <p class="hint" id="ai-safety">Safety: no interventions yet.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Discovered characteristics</h2>
+    <div class="scroll">
+      <table class="chars">
+        <thead><tr><th>UUID</th><th>Known role</th><th>Properties</th></tr></thead>
+        <tbody id="chars"><tr><td colspan="3" class="hint">Connect to list everything the robot exposes on service 0x00FF.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row" style="justify-content: space-between;">
+      <h2>BLE log</h2>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="log-drive"> Log drive repeats</label>
+        <button id="btn-copy">Copy log</button>
+        <button id="btn-clear">Clear</button>
+      </div>
+    </div>
+    <pre class="log" id="log"><span class="sys">Ready. → is sent to LOOI, ← is received from it.</span>
+</pre>
+  </section>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  // ---- Protocol constants (from @sourcebug/looi-sdk, MIT, and SOOPERCHARGE notes) ----
+  const SERVICE = "000000ff-0000-1000-8000-00805f9b34fb";
+  const EXTRA_SERVICES = [SERVICE, "battery_service", "device_information"];
+  const u = (s) => `0000${s}-0000-1000-8000-00805f9b34fb`;
+  const ROLES = {
+    fed0: "Drive", fed1: "Neck / head", fed2: "Light", fed9: "Sensors / dock (notify)",
+    feda: "Handshake control", fef0: "Handshake data (replies 59 = 'Y')",
+    fed3: "Unknown · write-only command", fed4: "Unknown · read + fast write (stream?)", fed5: "Cliff sensors, live state (mirror of 0x01)",
+    fed6: "Close-range sensor, live value (mirror of 0x02)", fed7: "Unknown · read/write setting", fed8: "Battery: [percent, charging flag]",
+    fedf: "Unknown · write-only — RISKY (possible OTA/reset)", fe00: "Script frames / animations", ff02: "Drive boost (unverified)"
+  };
+  const MOVE = { forward: "7707", left: "047a", back: "86fc", right: "0082", stop: "0000" };
+
+  // ---- State ----
+  const S = { dist: null, prox: null, cliff: null, docked: null, charging: null, battery: null, head: 135, light: false };
+  let device = null, chars = new Map(), lastSensor = null, lastByType = {}, typeStats = {}, sensorCount = 0, seq = 0;
+  let driveTimer = null, driveDeadline = 0, heldDir = null, writeChain = Promise.resolve();
+
+  const $ = (id) => document.getElementById(id);
+  const logEl = $("log");
+
+  // ---- Helpers ----
+  const toHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
+  function fromHex(str) {
+    const clean = str.replace(/0x/gi, "").replace(/[^0-9a-f]/gi, "");
+    if (!clean.length || clean.length % 2) throw new Error("Hex needs an even number of digits, e.g. 77 07");
+    return new Uint8Array(clean.match(/../g).map((h) => parseInt(h, 16)));
+  }
+  function timeHex(d = new Date()) {
+    const p = (n) => String(n).padStart(2, "0");
+    const s = `A${d.getFullYear()} ${p(d.getMonth() + 1)} ${p(d.getDate())} ${p(d.getHours())} ${p(d.getMinutes())} ${p(d.getSeconds())}`;
+    return new TextEncoder().encode(s);
+  }
+  function log(kind, msg) {
+    const t = new Date().toLocaleTimeString([], { hour12: false }) + "." + String(Date.now() % 1000).padStart(3, "0");
+    const span = document.createElement("span");
+    span.className = kind;
+    span.textContent = `${t}  ${msg}\n`;
+    logEl.appendChild(span);
+    while (logEl.childNodes.length > 1500) logEl.removeChild(logEl.firstChild);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function chip(id, text, state) { const el = $(id); el.textContent = text; el.className = "chip " + (state || ""); }
+  const short = (uuid) => uuid.slice(4, 8);
+
+  // Serialise writes: GATT rejects overlapping operations.
+  function write(key, bytes, { response = true, quiet = false } = {}) {
+    const c = chars.get(key);
+    if (!c) return Promise.reject(new Error(`Characteristic ${key.toUpperCase()} not found on this robot`));
+    const job = writeChain.then(async () => {
+      if (!quiet) log("tx", `→ ${key.toUpperCase()}  ${toHex(bytes)}${response ? "" : "  (no resp)"}`);
+      if (!response && c.properties.writeWithoutResponse && c.writeValueWithoutResponse) await c.writeValueWithoutResponse(bytes);
+      else await c.writeValueWithResponse(bytes);
+    });
+    writeChain = job.catch(() => {});
+    return job;
+  }
+
+  // ---- Connect / handshake ----
+  async function connect() {
+    if (!navigator.bluetooth) { $("nobt").hidden = false; return; }
+    try {
+      const opts = $("opt-any").checked
+        ? { acceptAllDevices: true, optionalServices: EXTRA_SERVICES }
+        : { filters: [{ name: "LOOI Robot" }, { namePrefix: "LOOI" }], optionalServices: EXTRA_SERVICES };
+      device = await navigator.bluetooth.requestDevice(opts);
+      device.addEventListener("gattserverdisconnected", onDisconnected);
+      chip("st-ble", "Connecting…", "warn");
+      log("sys", `Selected ${device.name || "unnamed device"}`);
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE);
+      const list = await service.getCharacteristics();
+      chars.clear();
+      for (const c of list) chars.set(short(c.uuid), c);
+      renderChars();
+      log("sys", `Found ${list.length} characteristics: ${[...chars.keys()].map((k) => k.toUpperCase()).join(", ")}`);
+      await subscribeAll();
+      probeStandardServices(server).then(pollBattery);
+      clearInterval(battTimer); battTimer = setInterval(pollBattery, 60000);
+      await handshake();
+      chip("st-ble", `Connected · ${device.name || "LOOI"}`, "ok");
+      setEnabled(true);
+    } catch (e) {
+      if (e.name === "NotFoundError") {
+        log("err", `No device connected: ${e.message}`);
+        log("sys", "If the picker was empty: LOOI is probably still connected to the phone app (connected robots stop advertising), or your laptop's Bluetooth is off. Try 'Show all BLE devices'.");
+        chip("st-ble", "No device", "bad");
+      }
+      else { log("err", `Connect failed: ${e.message}`); chip("st-ble", "Connect failed", "bad"); }
+    }
+  }
+
+  async function subscribeAll() {
+    for (const [key, c] of chars) {
+      if (!(c.properties.notify || c.properties.indicate)) continue;
+      c.addEventListener("characteristicvaluechanged", (ev) => onNotify(key, new Uint8Array(ev.target.value.buffer.slice(0))));
+      try { await c.startNotifications(); log("sys", `Listening on ${key.toUpperCase()}`); }
+      catch (e) { log("err", `Notify ${key.toUpperCase()} failed: ${e.message}`); }
+    }
+  }
+
+  async function handshake() {
+    if (!chars.has("feda") || !chars.has("fef0")) {
+      chip("st-hs", "Handshake not needed", "ok");
+      log("sys", "This firmware has no FEDA/FEF0 pair — skipping handshake.");
+      return;
+    }
+    chip("st-hs", "Handshaking…", "warn");
+    try {
+      await write("feda", fromHex("03"));
+      await write("fef0", timeHex());
+      await write("feda", fromHex("8101"));
+      chip("st-hs", "Handshake OK", "ok");
+      log("sys", "Handshake sent (03 → time → 8101). LOOI should stay connected now.");
+    } catch (e) {
+      chip("st-hs", "Handshake failed", "bad");
+      log("err", `Handshake failed: ${e.message}`);
+    }
+  }
+
+  function onDisconnected() {
+    stopDrive(false);
+    setEnabled(false);
+    chip("st-ble", "Disconnected", "bad");
+    chip("st-hs", "Handshake —");
+    log("err", "LOOI disconnected. If it happens a few seconds after connecting, the handshake didn't take — try Replay handshake right after Connect.");
+  }
+
+  // ---- Notifications ----
+  function onNotify(key, bytes) {
+    log("rx", `← ${key.toUpperCase()}  ${toHex(bytes)}`);
+    if (key === "fed8" && bytes.length >= 2) { showBattery(bytes[0], bytes[1] === 1 ? "charging" : "on battery"); return; }
+    if (key !== "fed9") return;
+    sensorCount++;
+    $("s-last").textContent = toHex(bytes);
+    $("s-len").textContent = `${bytes.length} byte${bytes.length === 1 ? "" : "s"}`;
+    $("s-count").textContent = String(sensorCount);
+    const hex = toHex(bytes);
+    const dock = hex === "05" ? "Phone docked" : hex === "06" ? "Phone removed" : null;
+    if (dock) S.docked = hex === "05";
+    if (dock) { $("s-dock").textContent = dock; chip("st-dock", dock, dock === "Phone docked" ? "ok" : "warn"); }
+    if (bytes.length === 3 && bytes[0] === 0x0e) {
+      const v = bytes[1] | (bytes[2] << 8);
+      $("s-dist").textContent = v === 0xffff ? "No target (out of range)" : `${v} mm (≈ ${(v / 10).toFixed(1)} cm)`;
+    }
+    if (bytes.length === 2 && bytes[0] === 0x0b) {
+      const on = bytes[1] === 1; S.charging = on;
+      $("s-charge").textContent = on ? "Plugged in" : "Unplugged";
+      chip("st-charge", on ? "Charging" : "On battery", on ? "ok" : "");
+    }
+    if (bytes.length === 5 && bytes[0] === 0x01) {
+      const g = Array.from(bytes.slice(1)); S.cliff = g;
+      const all = g.every((x) => x === 1), none = g.every((x) => x === 0);
+      $("s-cliff").textContent = g.map((x, i) => `S${i + 1}:${x ? "floor" : "EDGE"}`).join("  ") + (all ? "  · on surface" : none ? "  · lifted" : "  · EDGE DETECTED");
+      if (!all && typeof AI !== "undefined" && AI.busy) AI.abort = true;
+      if (!all && driving) { log("err", "Ground sensor lost the surface — emergency stop."); stopDrive("force"); }
+    }
+    if (bytes.length === 3) {
+      const t = bytes[0], v = bytes[1] | (bytes[2] << 8);
+      if (t === 0x0e) { S.distPrev = S.dist; S.dist = v; S.distAt = Date.now(); } else if (t === 0x02) S.prox = v;
+      const st = typeStats[t] || (typeStats[t] = { min: v, max: v, n: 0, v });
+      st.v = v; st.n++; if (v < st.min) st.min = v; if (v > st.max) st.max = v;
+      const NAMES = { 0x0e: "0E · front distance (mm)", 0x02: "02 · close-range proximity/light", 0x11: "11 · ready status after handshake" };
+      $("s-types").tBodies[0].innerHTML = Object.keys(typeStats).sort((a, b) => a - b).map((k) => {
+        const x = typeStats[k];
+        const label = NAMES[k] || Number(k).toString(16).padStart(2, "0").toUpperCase() + " · unknown";
+        return `<tr><td class="mono">${label}</td><td class="mono">${x.v === 0xffff ? "FFFF" : x.v}</td><td class="mono">${x.min}</td><td class="mono">${x.max === 0xffff ? "FFFF" : x.max}</td><td class="mono">${x.n}</td></tr>`;
+      }).join("");
+    }
+    const prev = lastByType[bytes[0] + ":" + bytes.length];
+    lastByType[bytes[0] + ":" + bytes.length] = bytes;
+    const box = $("s-bytes");
+    box.textContent = "";
+    bytes.forEach((b, i) => {
+      const s = document.createElement("span");
+      if (prev && prev[i] !== b) s.className = "changed";
+      s.innerHTML = `${b.toString(16).padStart(2, "0")}<small>[${i}] ${b}</small>`;
+      box.appendChild(s);
+    });
+    lastSensor = bytes;
+  }
+
+  // ---- Drive: joystick vector, streamed with deadman + time limit ----
+  // vec.y = forward (+) / back (−), vec.x = right (+) / left (−), each −1…1.
+  let vec = { x: 0, y: 0 }, driving = false, stickPointer = null;
+  const keysDown = new Set();
+  const sb = (n) => (n < 0 ? 256 + n : n) & 0xff;
+  function drivePayload() {
+    const dz = 0.08, mag = Math.hypot(vec.x, vec.y);
+    if (mag < dz) return new Uint8Array([0, 0]);
+    if ($("opt-classic").checked) {
+      const dir = Math.abs(vec.y) >= Math.abs(vec.x) ? (vec.y > 0 ? "forward" : "back") : (vec.x > 0 ? "right" : "left");
+      return fromHex(MOVE[dir]);
+    }
+    const sp = Math.min(127, Math.max(1, Number($("opt-speed").value) || 60));
+    const lin = Math.round(vec.y * sp), turn = Math.round(-vec.x * sp); // left turn is positive
+    return new Uint8Array([sb(lin), sb(turn)]);
+  }
+  function showVec() {
+    const p = drivePayload();
+    const lin = p[0] > 127 ? p[0] - 256 : p[0], turn = p[1] > 127 ? p[1] - 256 : p[1];
+    $("stick-read").textContent = `fwd ${lin >= 0 ? "+" : ""}${lin} · turn ${turn >= 0 ? "+" : ""}${turn} → ${toHex(p)}`;
+  }
+  function pulse() {
+    if (!driving) return;
+    if (Date.now() > driveDeadline) { log("sys", "Max drive time reached — auto-stop. Let go and grab again to continue."); haltDrive(true); return; }
+    const pl = drivePayload();
+    trRecord(pl);
+    write("fed0", pl, { response: false, quiet: !$("log-drive").checked }).catch((e) => { log("err", e.message); haltDrive(false); });
+  }
+  function beginDrive() {
+    if (!chars.has("fed0") || !device?.gatt?.connected) return;
+    if (driving) return;
+    driving = true;
+    driveDeadline = Date.now() + Math.max(0.5, Number($("opt-maxhold").value) || 8) * 1000;
+    const interval = Math.max(20, Number($("opt-interval").value) || 50);
+    log("tx", `→ FED0  streaming joystick every ${interval} ms`);
+    pulse();
+    driveTimer = setInterval(pulse, interval);
+  }
+  function haltDrive(send = true) {
+    if (driveTimer) { clearInterval(driveTimer); driveTimer = null; }
+    const was = driving;
+    driving = false;
+    vec = { x: 0, y: 0 };
+    stickPointer = null;
+    knob.style.transform = "translate(-50%, -50%)";
+    stick.classList.remove("active");
+    showVec();
+    if (send && chars.has("fed0") && device?.gatt?.connected && (was || send === "force")) {
+      write("fed0", fromHex(MOVE.stop), { response: false }).catch((e) => log("err", e.message));
+    }
+  }
+  const stopDrive = haltDrive; // used by disconnect / cliff logic
+
+  // Joystick
+  const stick = $("stick"), knob = $("knob");
+  function setFromPointer(e) {
+    const r = stick.getBoundingClientRect();
+    const radius = r.width / 2 - knob.offsetWidth / 2;
+    let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    const d = Math.hypot(dx, dy);
+    if (d > radius) { dx *= radius / d; dy *= radius / d; }
+    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    vec = { x: dx / radius, y: -dy / radius };
+    showVec();
+  }
+  stick.addEventListener("pointerdown", (e) => {
+    if (stick.getAttribute("aria-disabled") === "true") return;
+    e.preventDefault();
+    stickPointer = e.pointerId;
+    stick.setPointerCapture?.(e.pointerId);
+    stick.classList.add("active");
+    setFromPointer(e);
+    beginDrive();
+  });
+  stick.addEventListener("pointermove", (e) => { if (e.pointerId === stickPointer) setFromPointer(e); });
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach((ev) => stick.addEventListener(ev, (e) => { if (e.pointerId === stickPointer) haltDrive(true); }));
+  stick.addEventListener("contextmenu", (e) => e.preventDefault());
+  $("btn-stop").addEventListener("click", () => haltDrive("force"));
+  $("opt-speed").addEventListener("input", (e) => { $("speed-val").textContent = `${e.target.value} / 127`; showVec(); });
+
+  // Keyboard: combine keys into a vector, so W+A curves left.
+  const KEYS = { arrowup: "f", w: "f", arrowdown: "b", s: "b", arrowleft: "l", a: "l", arrowright: "r", d: "r" };
+  function keyVec() {
+    const y = (keysDown.has("f") ? 1 : 0) - (keysDown.has("b") ? 1 : 0);
+    const x = (keysDown.has("r") ? 1 : 0) - (keysDown.has("l") ? 1 : 0);
+    const m = Math.hypot(x, y) || 1;
+    vec = { x: x / m, y: y / m };
+    knob.style.transform = `translate(calc(-50% + ${vec.x * 40}%), calc(-50% + ${-vec.y * 40}%))`;
+    showVec();
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.target.matches("input, select, textarea") || !device?.gatt?.connected) return;
+    if (e.key === " ") { e.preventDefault(); keysDown.clear(); haltDrive("force"); return; }
+    const k = KEYS[e.key.toLowerCase()];
+    if (!k) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    keysDown.add(k); keyVec(); stick.classList.add("active"); beginDrive();
+  });
+  document.addEventListener("keyup", (e) => {
+    const k = KEYS[e.key.toLowerCase()];
+    if (!k) return;
+    keysDown.delete(k);
+    if (keysDown.size === 0 && stickPointer === null) haltDrive(true); else keyVec();
+  });
+  // Deadman: any loss of focus stops the motors.
+  window.addEventListener("blur", () => { keysDown.clear(); haltDrive(true); });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) { keysDown.clear(); haltDrive(true); } });
+
+  // ---- Head & light ----
+  const head = $("head");
+  let headTimer = null;
+  function sendHead(v) {
+    $("head-val").textContent = `0x${v.toString(16).padStart(2, "0").toUpperCase()} (${v})`;
+    clearTimeout(headTimer);
+    headTimer = setTimeout(() => write("fed1", new Uint8Array([v]), { response: false }).catch((e) => log("err", e.message)), 60);
+  }
+  head.addEventListener("input", () => sendHead(Number(head.value)));
+  document.querySelectorAll("[data-head]").forEach((b) => b.addEventListener("click", () => { head.value = b.dataset.head; sendHead(Number(b.dataset.head)); }));
+  $("btn-light-on").addEventListener("click", () => write("fed2", fromHex("01")).catch((e) => log("err", e.message)));
+  $("btn-light-off").addEventListener("click", () => write("fed2", fromHex("00")).catch((e) => log("err", e.message)));
+
+  // ---- Raw ----
+  $("raw-preset").addEventListener("change", (e) => {
+    if (!e.target.value) return;
+    const [key, hex] = e.target.value.split("|");
+    if ([...$("raw-char").options].some((o) => o.value === key)) $("raw-char").value = key;
+    $("raw-hex").value = hex;
+    e.target.value = "";
+  });
+  $("btn-raw").addEventListener("click", async () => {
+    const key = $("raw-char").value;
+    if ((key === "fedf" || key === "fed3") && !$("raw-risky").checked) {
+      log("err", `Blocked write to ${key.toUpperCase()}: write-only characteristics on an ESP32 can be firmware-update or reset commands. Tick "Allow writes to FED3 / FEDF" if you accept that risk.`);
+      return;
+    }
+    try {
+      const bytes = fromHex($("raw-hex").value);
+      if (key === "fe00" && $("raw-seq").checked) { bytes[0] = seq; seq = (seq + 1) & 0xff; }
+      await write(key, bytes, { response: $("raw-resp").checked });
+    } catch (e) { log("err", `Send failed: ${e.message}`); }
+  });
+  $("btn-read").addEventListener("click", async () => {
+    const key = $("raw-char").value, c = chars.get(key);
+    if (!c?.properties.read) { log("err", `${key.toUpperCase()} isn't readable — check its properties in the table.`); return; }
+    try { const v = await c.readValue(); log("rx", `← ${key.toUpperCase()} (read)  ${toHex(new Uint8Array(v.buffer))}`); }
+    catch (e) { log("err", `Read failed: ${e.message}`); }
+  });
+
+  // ---- Standard GATT services (battery level, device info) ----
+  async function probeStandardServices(server) {
+    try {
+      const bs = await server.getPrimaryService("battery_service");
+      const lvl = await bs.getCharacteristic("battery_level");
+      const v = await lvl.readValue();
+      showBattery(v.getUint8(0), "read");
+      if (lvl.properties.notify) {
+        lvl.addEventListener("characteristicvaluechanged", (ev) => showBattery(ev.target.value.getUint8(0), "notify"));
+        await lvl.startNotifications();
+      }
+    } catch (e) { log("sys", "No standard Battery Service — using FED8 for battery instead."); }
+    try {
+      const di = await server.getPrimaryService("device_information");
+      const names = { manufacturer_name_string: "Maker", model_number_string: "Model", firmware_revision_string: "Firmware", hardware_revision_string: "Hardware", software_revision_string: "Software" };
+      for (const [uuid, label] of Object.entries(names)) {
+        try { const c = await di.getCharacteristic(uuid); const v = await c.readValue(); log("sys", `${label}: ${new TextDecoder().decode(v)}`); } catch {}
+      }
+    } catch (e) { log("sys", `No Device Information service (${e.name}).`); }
+  }
+  let lastBatt = "";
+  function showBattery(pct, how) {
+    const sig = pct + how, dup = sig === lastBatt && Date.now() - (showBattery.at || 0) < 1000;
+    lastBatt = sig; showBattery.at = Date.now();
+    if (dup) return;
+    S.battery = pct; S.charging = how === "charging";
+    $("s-batt").textContent = `${pct}% · ${how}`;
+    chip("st-batt", `Battery ${pct}%${how === "charging" ? " ⚡" : ""}`, pct > 20 ? "ok" : "warn");
+    log("sys", `Battery ${pct}% (${how})`);
+  }
+  let battTimer = null;
+  async function pollBattery() {
+    const c = chars.get("fed8");
+    if (!c?.properties.read || !device?.gatt?.connected) return;
+    try { const v = new Uint8Array((await c.readValue()).buffer); if (v.length >= 2) showBattery(v[0], v[1] === 1 ? "charging" : "on battery"); }
+    catch (e) { log("err", `Battery read failed: ${e.message}`); }
+  }
+  $("btn-readall").addEventListener("click", async () => {
+    for (const [key, c] of chars) {
+      if (!c.properties.read) continue;
+      try { const v = await c.readValue(); log("rx", `← ${key.toUpperCase()} (read)  ${toHex(new Uint8Array(v.buffer))}`); }
+      catch (e) { log("err", `Read ${key.toUpperCase()} failed: ${e.message}`); }
+    }
+    log("sys", "Read all done. Compare these values on and off the charger, or before and after a long session, to spot a battery byte.");
+  });
+
+  // ===================================================================
+  // ---- AI pilot: OpenAI tool-calling brain + safety controller ----
+  // ===================================================================
+  const AI = { busy: false, abort: false, messages: [], autoTimer: null, autoUntil: 0, recog: null };
+  try { const k = localStorage.getItem("looi-openai-key"); if (k) { $("ai-key").value = k; $("ai-remember").checked = true; } } catch {}
+  try { const m = localStorage.getItem("looi-openai-model"); if (m) $("ai-model").value = m; } catch {}
+
+  function sensorSnapshot() {
+    return {
+      connected: !!device?.gatt?.connected,
+      battery_percent: S.battery, charging: S.charging, phone_docked: S.docked,
+      front_distance_mm: S.dist === 0xffff ? "nothing within ~85 cm" : S.dist,
+      something_very_close: S.prox === 0,
+      cliff_sensors: S.cliff ? (S.cliff.every((x) => x === 1) ? "all on surface" : S.cliff.every((x) => x === 0) ? "lifted off the surface" : "EDGE detected under " + S.cliff.map((x, i) => (x ? null : "S" + (i + 1))).filter(Boolean).join(",")) : "unknown",
+      head_position: S.head,
+      light_on: S.light,
+      camera: typeof visionSummary === "function" ? visionSummary() : "camera off",
+      local_time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    };
+  }
+
+  // ---- Safety controller: every physical action passes through here ----
+  function safetyNote(msg) { $("ai-safety").textContent = "Safety: " + msg; log("sys", "Safety: " + msg); }
+  function checkDrive(fwd) {
+    if (!device?.gatt?.connected) return "robot not connected";
+    if (driving) return "a human is driving manually";
+    if (EX.running) return "explore mode is running";
+    if (S.cliff && !S.cliff.every((x) => x === 1)) return "a cliff sensor does not see the surface";
+    if (S.battery != null && S.battery < 8 && !S.charging) return "battery too low to drive";
+    const minD = Number($("ai-mindist").value) || 150;
+    const fd = effDist();
+    if (fwd > 0 && fd < minD) return `obstacle ${fd} mm ahead (limit ${minD} mm)`;
+    if (fwd > 0 && S.prox === 0) return "something is right against the front";
+    return null;
+  }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function aiDrive(forward, turn, ms) {
+    const cap = Math.min(100, Number($("ai-maxspeed").value) || 50);
+    const f = Math.max(-cap, Math.min(cap, Math.round(forward)));
+    const t = Math.max(-cap, Math.min(cap, Math.round(turn)));
+    // Reversing is blind (no rear distance sensor): keep it short and slow.
+    const fwd = f < 0 ? Math.max(f, -40) : f;
+    const dur = Math.max(100, Math.min(fwd < 0 ? 800 : 2500, Math.round(ms)));
+    const veto = checkDrive(fwd);
+    if (veto) { safetyNote(`refused move: ${veto}`); return { ok: false, refused: veto }; }
+    const interval = Math.max(20, Number($("opt-interval").value) || 50);
+    const end = Date.now() + dur;
+    let stopReason = null;
+    while (Date.now() < end) {
+      if (AI.abort) { stopReason = "cancelled by STOP"; break; }
+      const v = checkDrive(fwd);
+      if (v) { stopReason = v; break; }
+      await write("fed0", new Uint8Array([sb(fwd), sb(t)]), { response: false, quiet: !$("log-drive").checked }).catch(() => {});
+      await sleep(interval);
+    }
+    await write("fed0", fromHex(MOVE.stop), { response: false }).catch(() => {});
+    if (stopReason) safetyNote(`stopped early: ${stopReason}`);
+    return { ok: !stopReason, forward: fwd, turn: t, duration_ms: dur, stopped_early: stopReason || undefined, sensors_after: sensorSnapshot() };
+  }
+  async function aiHead(pos) {
+    const named = { up: 0, center: 135, centre: 135, down: 255 };
+    const n = Number(pos);
+    const v = Number.isFinite(n) ? Math.max(0, Math.min(255, Math.round(n))) : (named[String(pos).toLowerCase()] ?? 135);
+    await write("fed1", new Uint8Array([v]), { response: false });
+    S.head = v; head.value = v; $("head-val").textContent = `0x${v.toString(16).padStart(2, "0").toUpperCase()} (${v})`;
+    return { ok: true, head: v };
+  }
+  async function aiGesture(name) {
+    if (!device?.gatt?.connected) return { ok: false, refused: "robot not connected" };
+    if (name === "nod") { for (const v of [70, 200, 70, 200, 135]) { if (AI.abort) break; await aiHead(v); await sleep(220); } }
+    else if (name === "look_around") { for (const v of [40, 135, 220, 135]) { if (AI.abort) break; await aiHead(v); await sleep(450); } }
+    else if (name === "wiggle") { for (const t of [45, -45, 45, -45]) { const r = await aiDrive(0, t, 220); if (!r.ok) return r; } }
+    else if (name === "spin") { const r = await aiDrive(0, 50, 2000); if (!r.ok) return r; }
+    else return { ok: false, error: "unknown gesture" };
+    return { ok: true, gesture: name };
+  }
+  async function aiLight(on) { await write("fed2", fromHex(on ? "01" : "00")); S.light = !!on; return { ok: true, light_on: !!on }; }
+
+  const TOOLS = [
+    { type: "function", function: { name: "drive", description: "Move the tracked base. forward and turn are -100..100 (positive forward = ahead, positive turn = left). duration_ms up to 2500. Use small values: 30-50 is a calm pace. Reversing is limited to 800 ms because there is no rear sensor.", parameters: { type: "object", properties: { forward: { type: "number" }, turn: { type: "number" }, duration_ms: { type: "number" } }, required: ["forward", "turn", "duration_ms"] } } },
+    { type: "function", function: { name: "set_head", description: "Tilt the neck. position is 'up', 'center', 'down' or a number 0 (up) to 255 (down).", parameters: { type: "object", properties: { position: { type: "string", description: "'up', 'center', 'down', or a number from 0 to 255 written as text" } }, required: ["position"] } } },
+    { type: "function", function: { name: "gesture", description: "Play a built-in body-language move.", parameters: { type: "object", properties: { name: { type: "string", enum: ["nod", "look_around", "wiggle", "spin"] } }, required: ["name"] } } },
+    { type: "function", function: { name: "set_light", description: "Turn LOOI's light on or off.", parameters: { type: "object", properties: { on: { type: "boolean" } }, required: ["on"] } } },
+    { type: "function", function: { name: "look", description: "Take a fresh photo through LOOI's forward camera. The photo arrives in the next message.", parameters: { type: "object", properties: {} } } },
+    { type: "function", function: { name: "read_sensors", description: "Get fresh sensor readings: battery, front distance, cliff sensors, dock and charging state.", parameters: { type: "object", properties: {} } } },
+    { type: "function", function: { name: "wait", description: "Pause before the next action, up to 3000 ms.", parameters: { type: "object", properties: { ms: { type: "number" } }, required: ["ms"] } } },
+  ];
+
+  async function execTool(name, args) {
+    try {
+      if (name === "drive") return await aiDrive(+args.forward || 0, +args.turn || 0, +args.duration_ms || 500);
+      if (name === "set_head") return await aiHead(args.position);
+      if (name === "gesture") return await aiGesture(args.name);
+      if (name === "set_light") return await aiLight(!!args.on);
+      if (name === "look") { const img = $("vis-ai").checked ? snapshot() : null; if (!img) return { ok: false, error: "camera is off or the AI is not allowed to see" }; AI.pendingImage = img; return { ok: true, note: "photo attached in the next message" }; }
+      if (name === "read_sensors") { await pollBattery(); return sensorSnapshot(); }
+      if (name === "wait") { await sleep(Math.max(0, Math.min(3000, +args.ms || 0))); return { ok: true }; }
+      return { ok: false, error: "unknown tool " + name };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
+
+  function systemPrompt() {
+    return `${$("ai-persona").value.trim()}
+
+You control a real robot on a real desk. Rules:
+- Speak in 1-2 short sentences, like a pet with a personality. No markdown, no emoji.
+- Use tools to act; chain several (e.g. set_head then drive then gesture). Prefer gentle speeds (30-50) and short moves (300-1500 ms).
+- A safety controller can refuse or stop moves. If it does, react in character and don't retry the same move blindly; turn away or back up a little instead.
+- When a camera photo is attached you can see through LOOI's eyes (the view straight ahead of the robot); describe and use what you see. Call the look tool for a fresh photo. Without a photo, never claim to see things.
+- Front distance is in millimetres; under ~150 mm means something is right in front of you.`;
+  }
+
+  function addMsg(kind, text) {
+    const d = document.createElement("div");
+    d.className = "msg " + kind;
+    d.textContent = text;
+    $("ai-chat").appendChild(d);
+    $("ai-chat").scrollTop = $("ai-chat").scrollHeight;
+    return d;
+  }
+  function speak(text) {
+    if (!$("ai-speak").checked || !("speechSynthesis" in window) || !text) return;
+    try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.rate = 1.05; u.pitch = 1.35; speechSynthesis.speak(u); } catch {}
+  }
+  function trimHistory() {
+    if (AI.messages.length <= 40) return;
+    let cut = AI.messages.length - 30;
+    while (cut < AI.messages.length && AI.messages[cut].role !== "user") cut++;
+    AI.messages = AI.messages.slice(cut);
+  }
+
+  async function callOpenAI() {
+    const key = $("ai-key").value.trim();
+    if (!key) throw new Error("Paste your OpenAI API key first.");
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: $("ai-model").value.trim() || "gpt-4o-mini", messages: [{ role: "system", content: systemPrompt() }, ...AI.messages], tools: TOOLS, tool_choice: "auto" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error?.message || `OpenAI returned HTTP ${res.status}`);
+    return data.choices[0].message;
+  }
+
+  // Only the newest photo is kept in the conversation, so token use stays flat.
+  function pushImageMessage(text, img) {
+    for (const m of AI.messages) if (Array.isArray(m.content)) m.content = m.content.filter((p) => p.type === "text").map((p) => p.text).join(" ") + " [older photo removed]";
+    AI.messages.push(img ? { role: "user", content: [{ type: "text", text }, { type: "image_url", image_url: { url: img, detail: "low" } }] } : { role: "user", content: text });
+  }
+  async function runAgent(text, { auto = false } = {}) {
+    if (AI.busy) return;
+    AI.busy = true; AI.abort = false;
+    chip("st-ai", auto ? "AI exploring…" : "AI thinking…", "warn");
+    if (!auto) addMsg("you", text);
+    const userText = `${text}\n\n[live sensors] ${JSON.stringify(sensorSnapshot())}`;
+    const img = $("vis-ai").checked ? snapshot() : null;
+    pushImageMessage(userText, img);
+    try {
+      for (let step = 0; step < 6 && !AI.abort; step++) {
+        const msg = await callOpenAI();
+        AI.messages.push(msg);
+        if (msg.content) { addMsg("looi", msg.content); speak(msg.content); }
+        if (!msg.tool_calls?.length) break;
+        chip("st-ai", "AI acting…", "warn");
+        for (const tc of msg.tool_calls) {
+          let args = {};
+          try { args = JSON.parse(tc.function.arguments || "{}"); } catch {}
+          const r = AI.abort ? { ok: false, refused: "cancelled by STOP" } : await execTool(tc.function.name, args);
+          addMsg("act", `${tc.function.name}(${JSON.stringify(args)}) → ${r.ok === false ? "✕ " + (r.refused || r.stopped_early || r.error) : "ok"}`);
+          AI.messages.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(r) });
+        }
+        if (AI.pendingImage) { pushImageMessage("[fresh photo from LOOI's camera]", AI.pendingImage); AI.pendingImage = null; }
+      }
+    } catch (e) {
+      addMsg("err", e.message);
+      AI.messages.pop();
+    } finally {
+      trimHistory();
+      AI.busy = false;
+      chip("st-ai", AI.autoTimer ? "Autonomous on" : "AI idle", AI.autoTimer ? "ok" : "");
+    }
+  }
+
+  $("ai-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const t = $("ai-text").value.trim();
+    if (!t) return;
+    $("ai-text").value = "";
+    runAgent(t);
+  });
+  $("ai-key").addEventListener("change", () => { try { if ($("ai-remember").checked) localStorage.setItem("looi-openai-key", $("ai-key").value.trim()); } catch {} });
+  $("ai-remember").addEventListener("change", (e) => {
+    try { if (e.target.checked) localStorage.setItem("looi-openai-key", $("ai-key").value.trim()); else localStorage.removeItem("looi-openai-key"); } catch {}
+  });
+  $("ai-model").addEventListener("change", (e) => { try { localStorage.setItem("looi-openai-model", e.target.value.trim()); } catch {} });
+
+  // Autonomous mode
+  function stopAuto(reason) {
+    clearInterval(AI.autoTimer); AI.autoTimer = null; $("ai-auto").checked = false;
+    if (reason) addMsg("sys", `Autonomous mode off: ${reason}.`);
+    if (!AI.busy) chip("st-ai", "AI idle");
+  }
+  $("ai-auto").addEventListener("change", (e) => {
+    if (!e.target.checked) { stopAuto("switched off"); return; }
+    if (!device?.gatt?.connected || !$("ai-key").value.trim()) { e.target.checked = false; addMsg("err", "Connect LOOI and add your API key before turning on autonomous mode."); return; }
+    AI.autoUntil = Date.now() + 5 * 60 * 1000;
+    addMsg("sys", "Autonomous mode on for up to 5 minutes.");
+    chip("st-ai", "Autonomous on", "ok");
+    const tick = () => {
+      if (Date.now() > AI.autoUntil) { stopAuto("5-minute limit reached"); return; }
+      if (!device?.gatt?.connected) { stopAuto("robot disconnected"); return; }
+      if (!AI.busy && !driving) runAgent("[autonomous tick] No one is talking to you. Decide what to do next: explore gently, react to your sensors, or rest. Keep any speech very short or say nothing.", { auto: true });
+    };
+    tick();
+    AI.autoTimer = setInterval(tick, 10000);
+  });
+
+  // STOP cancels AI too
+  $("btn-stop").addEventListener("click", () => { AI.abort = true; stopAuto(AI.autoTimer ? "STOP pressed" : null); try { speechSynthesis.cancel(); } catch {} });
+
+  // Voice input (Chrome / Edge; Brave blocks the speech service)
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { $("ai-mic").disabled = true; $("ai-mic").title = "Voice input isn't available in this browser — try Chrome or Edge"; }
+  $("ai-mic").addEventListener("click", () => {
+    if (!SR) return;
+    if (AI.recog) { AI.recog.stop(); return; }
+    const r = new SR(); AI.recog = r;
+    r.lang = navigator.language || "en-US"; r.interimResults = false; r.maxAlternatives = 1;
+    $("ai-mic").classList.add("listening");
+    r.onresult = (ev) => { const t = ev.results[0][0].transcript; if (t) runAgent(t); };
+    r.onerror = (ev) => addMsg("err", `Voice input: ${ev.error}${ev.error === "network" ? " (Brave blocks Google's speech service — use Chrome or Edge, or type)" : ""}`);
+    r.onend = () => { AI.recog = null; $("ai-mic").classList.remove("listening"); };
+    r.start();
+  });
+
+  // ===================================================================
+  // ---- Explore mode: local reactive state machine ----
+  //   cruise → (obstacle) → scan 360° → turn to most open sector → cruise
+  //   cruise → (edge) → stop, back up, turn away → cruise
+  //   any → (lifted) → wait until put down → scan
+  // ===================================================================
+  const EX = { running: false, state: "off", t0: 0, data: {}, samples: [], bins: null, best: -1, endAt: 0, mode: "explore",
+    heading: 0, lastTurn: 0, lastSendAt: 0, legs: [], leg: null,
+    wander: 0, wanderUntil: 0, darkSince: 0, brightSince: 0, liftedOkSince: 0, edges: [], scans: 0, edgeCount: 0, lastLight: null };
+  const NB = 12; // 30° sectors
+  const OPEN = 900; // mm treated as "open" (sensor reads FFFF beyond ~85 cm)
+  // Remember explore settings between sessions
+  ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins"].forEach((id) => {
+    try { const v = localStorage.getItem("looi-" + id); if (v != null) $(id).value = v; } catch {}
+    $(id).addEventListener("change", () => { try { localStorage.setItem("looi-" + id, $(id).value); } catch {} });
+  });
+  const exNum = (id, def) => { const v = Number($(id.replace("#", "")).value); return Number.isFinite(v) ? v : def; };
+  // Filtered front distance:
+  //  - a lone near reading that pops up between "nothing in range" readings is ignored for 200 ms (desk-surface flicker)
+  //  - readings near the learned self-echo (something that turns with LOOI) are ignored
+  const ECHO = { mm: null };
+  try { const e = Number(localStorage.getItem("looi-echo")); if (e > 0) ECHO.mm = e; } catch {}
+  function effDist() {
+    const raw = S.dist;
+    if (raw == null || raw === 0xffff) return OPEN;
+    if (S.distPrev === 0xffff && Date.now() - (S.distAt || 0) < 200) return OPEN;
+    if (ECHO.mm && Math.abs(raw - ECHO.mm) <= 30) return OPEN;
+    return Math.min(OPEN, raw);
+  }
+  function renderEcho() {
+    $("ex-echo").textContent = ECHO.mm ? `ignoring ~${ECHO.mm} mm` : "off";
+    $("ex-echo-reset").hidden = !ECHO.mm;
+  }
+  const cliffAllOn = () => !S.cliff || S.cliff.every((x) => x === 1);
+  const cliffAllOff = () => !!S.cliff && S.cliff.every((x) => x === 0);
+
+  function exEvent(msg) { $("ex-event").textContent = msg; log("sys", "Explore: " + msg); }
+  const degPerUnitMs = () => 360 / (exNum("#ex-spin", 6000) * exNum("#ex-turn", 50));
+  const angDiff = (a, b) => { let d = ((a - b) % 360 + 540) % 360 - 180; return d; };
+  const norm360 = (a) => ((a % 360) + 360) % 360;
+  function exSend(fwd, turn) {
+    // Dead-reckoned heading: no compass, so integrate commanded turn × calibrated spin rate.
+    const now = Date.now();
+    if (EX.lastSendAt) EX.heading += EX.lastTurn * degPerUnitMs() * Math.min(150, now - EX.lastSendAt);
+    EX.lastSendAt = now; EX.lastTurn = Math.round(turn);
+    return write("fed0", new Uint8Array([sb(Math.round(fwd)), sb(Math.round(turn))]), { response: false, quiet: true }).catch(() => {});
+  }
+  function exEnter(state, data = {}) {
+    if (EX.state === "cruise" && state !== "cruise" && EX.leg) {
+      const ms = Date.now() - EX.leg.t;
+      if (ms > 400) {
+        const end = { scan: "obstacle", pause: "obstacle", maneuver: "obstacle", backup: "edge", lifted: "picked up" }[state] || state;
+        EX.legs.push({ heading: norm360(EX.leg.h0 + angDiff(EX.heading, EX.leg.h0) / 2), ms, end });
+        if (EX.legs.length > 6) EX.legs.shift();
+        renderHistory();
+      }
+      EX.leg = null;
+    }
+    if (state === "cruise") EX.leg = { h0: EX.heading, t: Date.now() };
+    EX.state = state; EX.t0 = Date.now(); EX.data = data;
+    $("ex-state").textContent = { cruise: EX.mode === "imitate" ? "Cruising your way" : "Cruising", maneuver: "Avoiding, your style", scan: "Scanning 360°", turnto: "Turning to open space", backup: "Backing away from edge", escape: "Turning away from edge", lifted: "Picked up — waiting", pause: "Pausing" }[state] || state;
+    if (state === "scan") { EX.samples = []; EX.data.dir = Math.random() < 0.5 ? 1 : -1; EX.data.h0 = EX.heading; EX.scans++; }
+    $("ex-counts").textContent = `${EX.scans} · ${EX.edgeCount}`;
+  }
+  const since = () => Date.now() - EX.t0;
+
+  function exLight() {
+    if (!$("ex-lights").checked || S.prox == null) return;
+    const now = Date.now(), dark = exNum("#ex-dark", 15000), bright = exNum("#ex-bright", 40000);
+    if (S.prox < dark) { EX.brightSince = 0; EX.darkSince ||= now; } else if (S.prox > bright) { EX.darkSince = 0; EX.brightSince ||= now; } else { EX.darkSince = EX.brightSince = 0; }
+    if (EX.darkSince && now - EX.darkSince > 500 && EX.lastLight !== true) { EX.lastLight = true; write("fed2", fromHex("01")).catch(() => {}); S.light = true; exEvent("dark here — lights on"); }
+    if (EX.brightSince && now - EX.brightSince > 500 && EX.lastLight !== false) { const was = EX.lastLight; EX.lastLight = false; write("fed2", fromHex("00")).catch(() => {}); S.light = false; if (was === true) exEvent("bright again — lights off"); }
+  }
+
+  function recordEdge() {
+    const now = Date.now();
+    EX.edges = EX.edges.filter((t) => now - t < 20000);
+    EX.edges.push(now); EX.edgeCount++;
+    return EX.edges.length;
+  }
+
+  function finishScan() {
+    const bins = new Array(NB).fill(null);
+    for (const s of EX.samples) { const b = Math.floor(s.a / (360 / NB)) % NB; bins[b] = bins[b] == null ? s.d : Math.min(bins[b], s.d); }
+    const stopD = exNum("#ex-stopdist", 180);
+    const absOf = (i) => norm360(EX.data.h0 + EX.data.dir * (i + 0.5) * (360 / NB));
+    const penalty = (i) => {
+      const a = absOf(i); let f = 1;
+      for (const leg of EX.legs) if (Math.abs(angDiff(a, leg.heading)) < 35) f *= 0.65; // been that way recently
+      const last = EX.legs[EX.legs.length - 1];
+      if (last && Math.abs(angDiff(a, last.heading + 180)) < 40) f *= 0.5; // the way we just came from
+      return f;
+    };
+    let best = -1, bestD = -1, rawBest = -1, rawD = -1;
+    bins.forEach((d, i) => {
+      if (d == null || d < stopD + 40) return;
+      const jitter = Math.random() * 30;
+      if (d + jitter > rawD) { rawD = d + jitter; rawBest = i; }
+      const score = d * penalty(i) + jitter;
+      if (score > bestD) { bestD = score; best = i; }
+    });
+    EX.bins = bins; EX.best = best; EX.binDir = EX.data.dir;
+    drawRadar();
+    // Same near distance in every direction = something that turns with LOOI (phone, cable, desk surface), not walls.
+    const raws = EX.samples.map((x) => x.raw).filter((v) => v != null && v !== 0xffff);
+    if (best < 0 && raws.length > EX.samples.length * 0.6) {
+      const lo = Math.min(...raws), hi = Math.max(...raws);
+      if (hi - lo < 90) {
+        const sorted = [...raws].sort((a, b) => a - b);
+        ECHO.mm = sorted[Math.floor(sorted.length / 2)];
+        try { localStorage.setItem("looi-echo", String(ECHO.mm)); } catch {}
+        renderEcho();
+        exEvent(`the sensor read ${lo}–${hi} mm in every direction, so it's seeing something that turns with LOOI (docked phone, a cable, or the desk). Ignoring ~${ECHO.mm} mm from now on`);
+        EX.retries = 0;
+        return exEnter("cruise");
+      }
+    }
+    if (best < 0) {
+      EX.retries = (EX.retries || 0) + 1;
+      if (EX.retries > 2) { exEvent("boxed in on all sides after 3 scans — stopping"); stopExplore("no open direction found"); return; }
+      exEvent(`no open direction — backing up and scanning again (${EX.retries}/2)`);
+      return exEnter("backup", { rescan: true });
+    }
+    EX.retries = 0;
+    const angle = (best + 0.5) * (360 / NB);
+    const spin = exNum("#ex-spin", 6000);
+    // We're back where we started. Keep turning the same way for `angle`, or go the short way back.
+    const dir = angle <= 180 ? EX.data.dir : -EX.data.dir;
+    const deg = angle <= 180 ? angle : 360 - angle;
+    exEvent(`most open: ${bins[best] >= OPEN ? "over 85 cm" : bins[best] + " mm"} at ${Math.round(angle)}°${best !== rawBest ? " (skipped a recent path)" : ""} — heading there`);
+    exEnter("turnto", { dir, ms: (deg / 360) * spin });
+  }
+
+  async function exTick() {
+    if (!device?.gatt?.connected) return stopExplore("robot disconnected");
+    if (driving) return stopExplore("manual joystick took over");
+    if (AI.busy) return stopExplore("AI pilot is acting");
+    if (Date.now() > EX.endAt) return stopExplore("time limit reached");
+    if (S.battery != null && S.battery < 10 && !S.charging) return stopExplore("battery low");
+    exLight();
+    $("ex-dist").textContent = S.dist == null ? "—" : S.dist === 0xffff ? "clear (over 85 cm)" : `${S.dist} mm`;
+    $("ex-light").textContent = S.prox == null ? "—" : `${S.prox}${S.prox < exNum("#ex-dark", 15000) ? " · dark" : S.prox > exNum("#ex-bright", 40000) ? " · bright" : ""}`;
+
+    const cruise = exNum("#ex-cruise", 45), turnSp = exNum("#ex-turn", 50), stopD = exNum("#ex-stopdist", 180), spin = exNum("#ex-spin", 6000);
+    if (EX.state !== "lifted" && cliffAllOff()) { await exSend(0, 0); exEvent("picked up"); return exEnter("lifted"); }
+
+    switch (EX.state) {
+      case "cruise": {
+        if (!cliffAllOn()) { await exSend(0, 0); if (recordEdge() > 5) return stopExplore("keeps finding edges — the space is too small"); exEvent("edge detected"); return exEnter("backup"); }
+        const d = effDist();
+        const P = EX.mode === "imitate" ? TR.profile : null;
+        const cruiseSp = P ? P.cruise : cruise;
+        const react = P ? Math.max(stopD, P.reactDist) : stopD; // your reaction distance, never below the safety floor
+        if (d < react) {
+          if (P) { exEvent(`obstacle at ${d} mm — avoiding the way you do (${P.style})`); return exEnter("maneuver", planManeuver(P)); }
+          await exSend(0, 0); exEvent(`obstacle at ${d} mm — scanning around`); return exEnter("pause", { next: "scan", ms: 250 });
+        }
+        const now = Date.now();
+        if (now > EX.wanderUntil) {
+          EX.wander = P ? P.curveSign * P.curve * (0.4 + Math.random() * 1.2) : (Math.random() * 2 - 1) * 7;
+          EX.wanderUntil = now + 1500 + Math.random() * 2500;
+        }
+        const slowFrom = react + 270;
+        let slow = d < slowFrom ? Math.max(20, cruiseSp * (d - react) / (slowFrom - react)) : cruiseSp;
+        let turn = EX.wander;
+        if ($("vis-steer").checked && visFresh()) {
+          const blk = visNum("vis-block", 30) / 100;
+          if (VIS.center < blk) {
+            EX.visBlockSince ||= now;
+            if (now - EX.visBlockSince > 200) {
+              EX.visBlockSince = 0;
+              if (P) { exEvent("camera sees something ahead — avoiding your way"); return exEnter("maneuver", planManeuver(P)); }
+              const open = VIS.cols[VIS.bestCol];
+              if (open > blk + 0.15 && VIS.bestCol !== 4) {
+                const deg = Math.abs(4 - VIS.bestCol) / 4 * visNum("vis-fov", 70) / 2 + 15;
+                const dir = VIS.steer > 0 ? 1 : -1;
+                await exSend(0, 0);
+                exEvent(`camera sees something ahead — turning ${Math.round(deg)}° ${dir > 0 ? "left" : "right"} toward open floor`);
+                return exEnter("turnto", { dir, ms: (deg / 360) * spin });
+              }
+              await exSend(0, 0); exEvent("camera sees no open floor ahead — scanning around"); return exEnter("pause", { next: "scan", ms: 200 });
+            }
+          } else EX.visBlockSince = 0;
+          // Lean toward open floor; the more crowded the view, the harder the lean and the slower the pace.
+          turn = EX.wander * 0.4 + VIS.steer * (12 + 25 * (1 - Math.min(1, VIS.center / 0.7)));
+          slow *= Math.max(0.5, Math.min(1, VIS.center / 0.6));
+          slow = Math.max(20, slow);
+        }
+        return exSend(slow, turn);
+      }
+      case "pause": {
+        await exSend(0, 0);
+        if (since() > (EX.data.ms || 250)) exEnter(EX.data.next || "cruise");
+        return;
+      }
+      case "backup": {
+        if (since() < 200) return exSend(0, 0);
+        if (since() < 900) return exSend(-30, 0);
+        await exSend(0, 0);
+        if (EX.data.rescan) return exEnter("pause", { next: "scan", ms: 200 });
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        return exEnter("escape", { dir, ms: (140 + Math.random() * 60) / 360 * spin });
+      }
+      case "escape": case "turnto": {
+        if (!cliffAllOn()) { await exSend(0, 0); if (recordEdge() > 5) return stopExplore("keeps finding edges — the space is too small"); exEvent("edge while turning"); return exEnter("backup"); }
+        if (since() < EX.data.ms) return exSend(0, EX.data.dir * turnSp);
+        await exSend(0, 0);
+        return exEnter("pause", { next: "cruise", ms: 200 });
+      }
+      case "scan": {
+        if (!cliffAllOn()) { await exSend(0, 0); recordEdge(); exEvent("edge during scan — backing off"); return exEnter("backup"); }
+        const t = since();
+        if (t < spin) {
+          const vd = $("vis-steer").checked && visFresh() ? (VIS.center >= 0.6 ? OPEN : Math.round((VIS.center / 0.6) * OPEN)) : OPEN;
+          EX.samples.push({ a: (t / spin) * 360, d: Math.min(effDist(), vd), raw: S.dist });
+          if (EX.samples.length % 6 === 0) { EX.bins = null; drawRadar(true); }
+          return exSend(0, EX.data.dir * turnSp);
+        }
+        await exSend(0, 0);
+        return finishScan();
+      }
+      case "maneuver": {
+        if (!cliffAllOn()) { await exSend(0, 0); if (recordEdge() > 5) return stopExplore("keeps finding edges — the space is too small"); exEvent("edge while avoiding"); return exEnter("backup"); }
+        const P = TR.profile, m = EX.data, t = since();
+        if (m.kind === "reverse" && t < 500) return exSend(-28, 0);
+        const tt = m.kind === "reverse" ? t - 500 : t;
+        if (tt < m.ms) {
+          const arcFwd = m.kind === "arc" && effDist() > Math.max(110, stopD * 0.6) ? P.arcFwd : 0; // arcs only while there's room
+          return exSend(arcFwd, m.side * P.turnSpeed);
+        }
+        await exSend(0, 0);
+        if (effDist() < Math.max(stopD, P.reactDist)) { exEvent("still blocked after your move — scanning instead"); return exEnter("pause", { next: "scan", ms: 200 }); }
+        return exEnter("cruise");
+      }
+      case "lifted": {
+        await exSend(0, 0);
+        if (cliffAllOn()) { EX.liftedOkSince ||= Date.now(); if (Date.now() - EX.liftedOkSince > 800) { EX.liftedOkSince = 0; exEvent("put down — having a look around"); exEnter("scan"); } }
+        else EX.liftedOkSince = 0;
+        return;
+      }
+    }
+  }
+
+  // Pick a side the way you usually do, but avoid turning onto a path from the last 6 legs.
+  function planManeuver(P) {
+    let side = Math.random() < P.pLeft ? 1 : -1;
+    const turnDeg = (s) => s * P.turnSpeed * P.turnMs * degPerUnitMs();
+    const clash = (s) => EX.legs.some((leg) => Math.abs(angDiff(EX.heading + turnDeg(s), leg.heading)) < 35);
+    if (clash(side) && !clash(-side)) side = -side;
+    return { kind: P.style, side, ms: P.turnMs };
+  }
+  function renderHistory() {
+    const el = $("ex-history");
+    if (!EX.legs.length) { el.innerHTML = '<li class="hint">No legs yet.</li>'; return; }
+    el.innerHTML = EX.legs.slice().reverse().map((l) => `<li><span class="mono">${String(Math.round(l.heading)).padStart(3, " ")}°</span> · ${(l.ms / 1000).toFixed(1)} s · ended at ${l.end}</li>`).join("");
+  }
+
+  async function exLoop() {
+    while (EX.running) {
+      const started = Date.now();
+      try { await exTick(); } catch (e) { log("err", "Explore: " + e.message); }
+      await sleep(Math.max(0, 50 - (Date.now() - started))); // fixed 50 ms: slower ticks make the motors stutter
+    }
+  }
+
+  function startExplore(mode = "explore") {
+    if (!device?.gatt?.connected || EX.running) return;
+    if (mode === "imitate" && !TR.profile) { trStatus("Learn your style first: record some driving, then press Learn my style."); return; }
+    if (TR.recording) toggleRecording();
+    EX.mode = mode; EX.heading = 0; EX.lastSendAt = 0; EX.lastTurn = 0; EX.legs = []; EX.leg = null; renderHistory();
+    if (driving) haltDrive(true);
+    if (AI.autoTimer) stopAuto("explore mode started");
+    EX.running = true; EX.scans = 0; EX.edgeCount = 0; EX.edges = []; EX.lastLight = null; EX.bins = null; EX.best = -1;
+    EX.endAt = Date.now() + exNum("#ex-mins", 10) * 60000;
+    $("ex-start").disabled = true; $("ex-stop").disabled = false; $("ex-cal").disabled = true;
+    chip("st-explore", mode === "imitate" ? "Driving like you" : "Exploring", "ok");
+    $("tr-run").disabled = true;
+    exEvent(mode === "imitate" ? "started driving in your style" : "started");
+    exEnter(effDist() < exNum("#ex-stopdist", 180) ? "scan" : "cruise");
+    exLoop();
+  }
+  async function stopExplore(reason) {
+    if (!EX.running && EX.state === "off") return;
+    EX.running = false; EX.state = "off";
+    await exSend(0, 0);
+    if (EX.lastLight) { write("fed2", fromHex("00")).catch(() => {}); S.light = false; }
+    $("ex-state").textContent = "Stopped";
+    if (reason) exEvent("stopped: " + reason);
+    chip("st-explore", "Explore off");
+    const on = !!device?.gatt?.connected;
+    $("ex-start").disabled = !on; $("ex-stop").disabled = true; $("ex-cal").disabled = !on;
+    $("tr-run").disabled = !on || !TR.profile;
+    if (EX.state === "off") EX.mode = "explore";
+  }
+  $("ex-start").addEventListener("click", () => startExplore("explore"));
+  $("ex-stop").addEventListener("click", () => stopExplore("stopped by you"));
+  $("btn-stop").addEventListener("click", () => { if (EX.running) stopExplore("STOP pressed"); });
+  document.addEventListener("visibilitychange", () => { if (document.hidden && EX.running) stopExplore("tab went to the background"); });
+
+  $("ex-cal").addEventListener("click", async () => {
+    if (!device?.gatt?.connected || EX.running || driving) return;
+    const spin = exNum("#ex-spin", 6000), turnSp = exNum("#ex-turn", 50);
+    $("ex-cal").disabled = true; $("ex-start").disabled = true;
+    exEvent(`test spin: ${spin} ms at turn speed ${turnSp}`);
+    const end = Date.now() + spin;
+    while (Date.now() < end) {
+      if (!cliffAllOn()) { exEvent("test spin stopped: edge detected"); break; }
+      await exSend(0, turnSp);
+      await sleep(50);
+    }
+    await exSend(0, 0);
+    exEvent("test spin done — overshot? lower the time. Short? raise it.");
+    $("ex-cal").disabled = false; $("ex-start").disabled = false;
+  });
+
+  function drawRadar(live = false) {
+    const c = $("ex-canvas"), g = c.getContext("2d"), css = getComputedStyle(document.documentElement);
+    const col = (n) => css.getPropertyValue(n).trim();
+    const W = c.width, R = W / 2 - 14, cx = W / 2, cy = W / 2;
+    g.clearRect(0, 0, W, W);
+    g.strokeStyle = col("--line"); g.lineWidth = 1;
+    for (const f of [1 / 3, 2 / 3, 1]) { g.beginPath(); g.arc(cx, cy, R * f, 0, Math.PI * 2); g.stroke(); }
+    g.fillStyle = col("--muted"); g.font = "10px " + (col("--f-mono") || "monospace");
+    g.fillText("30 cm", cx + 3, cy - R / 3 - 2); g.fillText("60 cm", cx + 3, cy - (2 * R) / 3 - 2); g.fillText("85+", cx + 3, cy - R - 2);
+    // Angle 0 = where LOOI faced when the scan began (up). Spin direction sets which side angles grow on.
+    const dirSign = (live ? EX.data.dir : EX.binDir) || 1;
+    const toXY = (deg, r) => { const rad = (-dirSign * deg - 90) * Math.PI / 180; return [cx + Math.cos(rad) * r, cy + Math.sin(rad) * r]; };
+    if (live || !EX.bins) {
+      g.fillStyle = col("--accent");
+      for (const s of EX.samples) { const [x, y] = toXY(s.a, (s.d / OPEN) * R); g.beginPath(); g.arc(x, y, 2, 0, Math.PI * 2); g.fill(); }
+    } else {
+      EX.bins.forEach((d, i) => {
+        if (d == null) return;
+        const a0 = i * 30, a1 = a0 + 30, r = (d / OPEN) * R;
+        g.beginPath(); g.moveTo(cx, cy);
+        for (let a = a0; a <= a1; a += 3) { const [x, y] = toXY(a, r); g.lineTo(x, y); }
+        g.closePath();
+        g.globalAlpha = i === EX.best ? 0.9 : 0.35;
+        g.fillStyle = i === EX.best ? col("--good") : col("--accent");
+        g.fill(); g.globalAlpha = 1;
+      });
+    }
+    g.fillStyle = col("--fg"); g.beginPath(); g.moveTo(cx, cy - 8); g.lineTo(cx - 6, cy + 6); g.lineTo(cx + 6, cy + 6); g.closePath(); g.fill();
+  }
+  drawRadar();
+  renderEcho();
+  $("ex-echo-reset").addEventListener("click", () => { ECHO.mm = null; try { localStorage.removeItem("looi-echo"); } catch {} renderEcho(); exEvent("self-echo filter cleared"); });
+
+  // ===================================================================
+  // ---- Training wheels: record joystick driving → style profile ----
+  // ===================================================================
+  const TR = { recording: false, samples: [], profile: null, recStart: 0 };
+  try { const p = JSON.parse(localStorage.getItem("looi-style") || "null"); if (p && p.cruise) TR.profile = p; } catch {}
+  function trStatus(msg) { $("tr-status").textContent = msg; }
+  const signed = (b) => (b > 127 ? b - 256 : b);
+  function trRecord(payload) {
+    if (!TR.recording) return;
+    TR.samples.push({ t: Date.now(), f: signed(payload[0]), r: signed(payload[1]), d: effDist(), x: S.prox, c: cliffAllOn() ? 1 : 0 });
+    if (TR.samples.length % 20 === 0) trStatus(`Recording… ${((Date.now() - TR.recStart) / 1000).toFixed(0)} s of driving time, ${TR.samples.length} samples. Steer around a few obstacles too.`);
+  }
+  function toggleRecording() {
+    TR.recording = !TR.recording;
+    if (TR.recording) {
+      TR.samples = []; TR.recStart = Date.now();
+      $("tr-rec").textContent = "Stop recording"; $("tr-rec").classList.add("stop");
+      chip("st-train", "Recording", "warn");
+      trStatus("Recording. Drive with the joystick now; only time spent driving is captured.");
+    } else {
+      $("tr-rec").textContent = "Record my driving"; $("tr-rec").classList.remove("stop");
+      chip("st-train", TR.profile ? "Style learned" : "No style learned", TR.profile ? "ok" : "");
+      trStatus(`Recorded ${TR.samples.length} samples (${(TR.samples.length * 0.05).toFixed(0)} s of driving). Press Learn my style.`);
+      $("tr-learn").disabled = TR.samples.length < 100;
+      if (TR.samples.length < 100) trStatus(`Only ${TR.samples.length} samples. Record at least 5–10 seconds of driving.`);
+    }
+  }
+
+  function learnProfile(sm) {
+    const med = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const TURN = 25;
+    const cruising = (s) => s.f > 10 && Math.abs(s.r) < TURN;
+    const cruiseS = sm.filter((s) => cruising(s) && s.d >= 450);
+    const cruiseAll = sm.filter(cruising);
+    const base = cruiseS.length > 20 ? cruiseS : cruiseAll;
+    const cruise = med(base.map((s) => s.f)) ?? 45;
+    const curve = med(base.map((s) => Math.abs(s.r))) ?? 0;
+    const rsum = base.reduce((a, s) => a + s.r, 0);
+    const curveSign = rsum >= 0 ? 1 : -1;
+
+    // Find reactions: you were cruising, something got within 65 cm, and you changed what you were doing.
+    const reactions = [];
+    for (let i = 1; i < sm.length; i++) {
+      const s = sm[i], prev = sm[i - 1];
+      const changed = Math.abs(s.r) >= TURN || s.f < 0 || s.f < cruise * 0.5;
+      if (!(cruising(prev) && changed && s.d < 650 && s.c)) continue;
+      let j = i, calm = 0;
+      while (j < sm.length && j - i < 80) { if (cruising(sm[j])) { if (++calm >= 3) break; } else calm = 0; j++; }
+      const win = sm.slice(i, j);
+      const turning = win.filter((w) => Math.abs(w.r) >= TURN);
+      if (turning.length < 3 && !win.some((w) => w.f < -5)) { i = j; continue; }
+      const kind = win.some((w) => w.f < -5) ? "reverse" : (med(turning.map((w) => w.f)) ?? 0) > 12 ? "arc" : "pivot";
+      const side = turning.reduce((a, w) => a + w.r, 0) >= 0 ? 1 : -1;
+      const dt = win.length > 1 ? (win[win.length - 1].t - win[0].t) / (win.length - 1) : 50;
+      reactions.push({ dist: s.d, kind, side, turnMs: turning.length * dt, turnSpeed: med(turning.map((w) => Math.abs(w.r))) ?? 50, arcFwd: med(turning.map((w) => Math.max(0, w.f))) ?? 0 });
+      i = j;
+    }
+    const kinds = { arc: 0, pivot: 0, reverse: 0 };
+    reactions.forEach((r) => kinds[r.kind]++);
+    const style = reactions.length ? Object.entries(kinds).sort((a, b) => b[1] - a[1])[0][0] : "pivot";
+    const lefts = reactions.filter((r) => r.side > 0).length;
+    return {
+      cruise: clamp(Math.round(cruise), 15, 100),
+      curve: clamp(Math.round(curve), 0, 24),
+      curveSign,
+      reactDist: clamp(Math.round(med(reactions.map((r) => r.dist)) ?? 250), 140, 600),
+      style,
+      kinds,
+      pLeft: reactions.length ? lefts / reactions.length : 0.5,
+      turnSpeed: clamp(Math.round(med(reactions.map((r) => r.turnSpeed)) ?? 50), 20, 100),
+      turnMs: clamp(Math.round(med(reactions.map((r) => r.turnMs)) ?? 800), 200, 3000),
+      arcFwd: clamp(Math.round(med(reactions.filter((r) => r.kind === "arc").map((r) => r.arcFwd)) ?? 25), 10, 60),
+      reactions: reactions.length,
+      seconds: Math.round(sm.length * 0.05),
+      learnedAt: new Date().toISOString(),
+    };
+  }
+
+  function renderProfile() {
+    const P = TR.profile;
+    const set = (id, v) => { $(id).textContent = v; };
+    if (!P) { ["tp-cruise", "tp-curve", "tp-react", "tp-style", "tp-side", "tp-turn", "tp-from"].forEach((id) => set(id, "—")); return; }
+    set("tp-cruise", `${P.cruise} / 127`);
+    set("tp-curve", P.curve < 4 ? "drives straight" : `${P.curve} towards the ${P.curveSign > 0 ? "left" : "right"}`);
+    set("tp-react", `${P.reactDist} mm${P.reactions ? "" : " (default — no reactions seen)"}`);
+    set("tp-style", { arc: "arcs around while moving", pivot: "stops and turns on the spot", reverse: "backs up, then turns" }[P.style] + (P.reactions ? `  (arc ${P.kinds.arc} · pivot ${P.kinds.pivot} · reverse ${P.kinds.reverse})` : ""));
+    set("tp-side", `${Math.round(P.pLeft * 100)}% left · ${Math.round((1 - P.pLeft) * 100)}% right`);
+    set("tp-turn", `${P.turnSpeed} for ${(P.turnMs / 1000).toFixed(1)} s`);
+    set("tp-from", `${P.seconds} s of driving · ${P.reactions} obstacle reactions`);
+    chip("st-train", "Style learned", "ok");
+  }
+
+  $("tr-rec").addEventListener("click", toggleRecording);
+  $("tr-learn").addEventListener("click", () => {
+    const P = learnProfile(TR.samples);
+    TR.profile = P;
+    try { localStorage.setItem("looi-style", JSON.stringify(P)); } catch {}
+    renderProfile();
+    $("tr-run").disabled = !device?.gatt?.connected;
+    $("tr-ai").disabled = false;
+    trStatus(P.reactions < 2
+      ? `Learned your cruising, but only ${P.reactions} obstacle reaction${P.reactions === 1 ? "" : "s"}. Record again and steer away from a few obstacles so LOOI learns how you avoid them.`
+      : `Learned from ${P.reactions} obstacle reactions. Press Drive like me.`);
+  });
+  $("tr-run").addEventListener("click", () => startExplore("imitate"));
+  $("tr-reset").addEventListener("click", () => {
+    TR.profile = null; try { localStorage.removeItem("looi-style"); } catch {}
+    renderProfile(); chip("st-train", "No style learned"); $("tr-run").disabled = true; $("tr-ai").disabled = true; $("tr-ai-text").hidden = true;
+    trStatus("Style forgotten.");
+  });
+  $("tr-ai").addEventListener("click", async () => {
+    const key = $("ai-key").value.trim();
+    if (!key) { trStatus("Add your OpenAI key in the AI pilot section first."); return; }
+    if (!TR.profile) return;
+    $("tr-ai").disabled = true; trStatus("Asking AI…");
+    try {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model: $("ai-model").value.trim() || "gpt-4o-mini", messages: [
+          { role: "system", content: "You are LOOI, a small desk robot, describing how your owner drives you. Speeds are on a -127..127 scale, distances in mm. Reply in 2-3 short, warm, slightly cheeky sentences, then one concrete tip on how they could teach you better. No markdown." },
+          { role: "user", content: JSON.stringify(TR.profile) },
+        ] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+      const text = data.choices[0].message.content;
+      $("tr-ai-text").textContent = text; $("tr-ai-text").hidden = false; speak(text);
+      trStatus("AI description ready.");
+    } catch (e) { trStatus("AI request failed: " + e.message); }
+    $("tr-ai").disabled = false;
+  });
+  renderProfile();
+  if (TR.profile) { $("tr-ai").disabled = false; trStatus(`Loaded your saved style (${TR.profile.seconds} s of driving, ${TR.profile.reactions} reactions).`); }
+
+  // ===================================================================
+  // ---- Eyes: rear camera free-floor detection + face mode ----
+  // ===================================================================
+  const VIS = { stream: null, running: false, cols: null, center: null, bestCol: -1, steer: 0, at: 0, fps: 0, ref: null, frames: 0, fpsAt: 0 };
+  const NC = 9; // vision columns
+  const visNum = (id, def) => { const v = Number($(id).value); return Number.isFinite(v) ? v : def; };
+  const visFresh = () => VIS.running && Date.now() - VIS.at < 400;
+  const visWork = document.createElement("canvas");
+  visWork.width = 96; visWork.height = 72;
+  const visCtx = visWork.getContext("2d", { willReadFrequently: true });
+
+  async function listCameras() {
+    try {
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+      const sel = $("cam-select"), keep = sel.value;
+      sel.innerHTML = '<option value="">Rear camera (default)</option>' + devs.map((d, i) => `<option value="${d.deviceId}">${d.label || "Camera " + (i + 1)}</option>`).join("");
+      sel.value = keep;
+    } catch {}
+  }
+  async function startCamera() {
+    if (!navigator.mediaDevices?.getUserMedia) { chip("st-cam", "No camera access", "bad"); log("err", "Camera needs https (or localhost). Open the GitHub Pages link instead of the file."); return; }
+    stopCamera(true);
+    const id = $("cam-select").value;
+    try {
+      VIS.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: id ? { deviceId: { exact: id }, width: { ideal: 640 }, height: { ideal: 480 } } : { facingMode: { ideal: "environment" }, width: { ideal: 640 }, height: { ideal: 480 } } });
+      const v = $("cam-video"); v.srcObject = VIS.stream; await v.play();
+      VIS.running = true; VIS.ref = null;
+      $("cam-start").disabled = true; $("cam-stop").disabled = false;
+      chip("st-cam", "Camera on", "ok");
+      log("sys", "Camera started: " + (VIS.stream.getVideoTracks()[0]?.label || "rear camera"));
+      listCameras();
+      visLoop();
+    } catch (e) { chip("st-cam", "Camera blocked", "bad"); log("err", `Camera: ${e.name} — ${e.message}`); }
+  }
+  function stopCamera(quiet) {
+    VIS.running = false;
+    VIS.stream?.getTracks().forEach((t) => t.stop()); VIS.stream = null;
+    $("cam-start").disabled = false; $("cam-stop").disabled = true;
+    if (!quiet) chip("st-cam", "Camera off");
+  }
+  $("cam-start").addEventListener("click", startCamera);
+  $("cam-stop").addEventListener("click", () => stopCamera());
+  $("cam-select").addEventListener("change", () => { if (VIS.running) startCamera(); });
+
+  // Free-floor analysis on a 96×72 thumbnail.
+  function analyseFrame() {
+    const v = $("cam-video");
+    if (!v.videoWidth) return;
+    const W = visWork.width, H = visWork.height;
+    visCtx.drawImage(v, 0, 0, W, H);
+    const px = visCtx.getImageData(0, 0, W, H).data;
+    const feat = (i) => { const r = px[i], g = px[i + 1], b = px[i + 2], s = r + g + b + 1; return [r / s, g / s, s / 765]; };
+    // Floor reference: bottom-centre patch, smoothed over time. Only update when the distance sensor agrees it's clear.
+    let ar = 0, ag = 0, al = 0, n = 0;
+    for (let y = Math.floor(H * 0.85); y < H; y++) for (let x = Math.floor(W * 0.38); x < Math.floor(W * 0.62); x++) { const f = feat((y * W + x) * 4); ar += f[0]; ag += f[1]; al += f[2]; n++; }
+    const now = [ar / n, ag / n, al / n];
+    if (!VIS.ref) VIS.ref = now;
+    else if (effDist() > 250) VIS.ref = VIS.ref.map((v0, k) => v0 * 0.9 + now[k] * 0.1);
+    const tol = visNum("vis-tol", 0.09);
+    const isFloor = (i) => { const f = feat(i); const dc = Math.hypot(f[0] - VIS.ref[0], f[1] - VIS.ref[1]); const dl = Math.abs(f[2] - VIS.ref[2]); return dc < tol * 0.5 && dl < tol * 3.5; };
+    // For each column, climb from the bottom until the floor stops.
+    const cw = W / NC, cols = [];
+    for (let c = 0; c < NC; c++) {
+      const x0 = Math.floor(c * cw), x1 = Math.floor((c + 1) * cw);
+      let free = 0, miss = 0;
+      for (let y = H - 1; y >= 0; y--) {
+        let f = 0, t = 0;
+        for (let x = x0; x < x1; x += 2) { t++; if (isFloor((y * W + x) * 4)) f++; }
+        if (f / t >= 0.5) { miss = 0; free = H - y; } else if (++miss >= 3) break;
+      }
+      cols.push(free / H);
+    }
+    // Smooth across neighbours so a single noisy column doesn't steer.
+    const sm = cols.map((v0, i) => (v0 * 2 + (cols[i - 1] ?? v0) + (cols[i + 1] ?? v0)) / 4);
+    let best = 0; sm.forEach((v0, i) => { if (v0 > sm[best] + 0.02 || (Math.abs(v0 - sm[best]) <= 0.02 && Math.abs(i - 4) < Math.abs(best - 4))) best = i; });
+    VIS.cols = sm; VIS.bestCol = best;
+    VIS.center = (sm[3] + sm[4] * 2 + sm[5]) / 4;
+    VIS.steer = (4 - best) / 4; // +1 = open space on the left (positive turn = left)
+    VIS.at = Date.now();
+    VIS.frames++;
+    if (Date.now() - VIS.fpsAt > 1000) { VIS.fps = VIS.frames; VIS.frames = 0; VIS.fpsAt = Date.now(); $("vis-fps").textContent = `${VIS.fps} frames/s`; }
+    drawOverlay();
+  }
+  function drawOverlay() {
+    const v = $("cam-video"), c = $("cam-overlay");
+    c.width = v.clientWidth; c.height = v.clientHeight;
+    const g = c.getContext("2d"), css = getComputedStyle(document.documentElement);
+    const good = css.getPropertyValue("--good").trim(), bad = css.getPropertyValue("--bad").trim();
+    const blk = visNum("vis-block", 30) / 100, cw = c.width / NC;
+    VIS.cols.forEach((f, i) => {
+      g.globalAlpha = 0.35; g.fillStyle = f < blk ? bad : good;
+      g.fillRect(i * cw + 1, c.height * (1 - f), cw - 2, c.height * f);
+    });
+    g.globalAlpha = 1; g.strokeStyle = "#fff"; g.lineWidth = 2;
+    g.strokeRect(VIS.bestCol * cw + 1, 1, cw - 2, c.height - 2);
+    $("vis-center").textContent = `${Math.round(VIS.center * 100)}% of view${VIS.center < blk ? " · blocked" : ""}`;
+    $("vis-best").textContent = VIS.bestCol === 4 ? "straight ahead" : `${VIS.bestCol < 4 ? "left" : "right"} ${Math.round(Math.abs(4 - VIS.bestCol) / 4 * visNum("vis-fov", 70) / 2)}°`;
+  }
+  async function visLoop() {
+    while (VIS.running) {
+      const t0 = Date.now();
+      try { analyseFrame(); } catch (e) { log("err", "Vision: " + e.message); }
+      await sleep(Math.max(0, 100 - (Date.now() - t0)));
+    }
+  }
+
+  // Snapshot for the AI pilot (small JPEG, low-detail mode keeps it cheap).
+  function snapshot() {
+    const v = $("cam-video");
+    if (!VIS.running || !v.videoWidth) return null;
+    const c = document.createElement("canvas"), sc = 512 / Math.max(v.videoWidth, v.videoHeight);
+    c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.7);
+  }
+  function visionSummary() {
+    if (!visFresh()) return "camera off";
+    const blk = visNum("vis-block", 30) / 100;
+    return `free floor ahead ${Math.round(VIS.center * 100)}%${VIS.center < blk ? " (blocked)" : ""}, most open: ${$("vis-best").textContent}`;
+  }
+
+  // ---- Face mode ----
+  const FACE = { on: false, blinkAt: 0, mood: "calm", lookX: 0, lookY: 0, raf: 0, wake: null, lastTap: 0 };
+  async function faceOn() {
+    FACE.on = true; $("face").hidden = false;
+    try { await $("face").requestFullscreen?.(); } catch {}
+    try { FACE.wake = await navigator.wakeLock?.request("screen"); } catch {}
+    FACE.raf = requestAnimationFrame(drawFace);
+  }
+  function faceOff() {
+    FACE.on = false; $("face").hidden = true; cancelAnimationFrame(FACE.raf);
+    try { if (document.fullscreenElement) document.exitFullscreen(); } catch {}
+    try { FACE.wake?.release(); } catch {}
+  }
+  $("face-btn").addEventListener("click", faceOn);
+  $("face").addEventListener("pointerup", () => { const t = Date.now(); if (t - FACE.lastTap < 350) faceOff(); FACE.lastTap = t; });
+  function faceMood() {
+    if (S.cliff && !S.cliff.every((x) => x === 1)) return "scared";
+    if (effDist() < 200 || (visFresh() && VIS.center < visNum("vis-block", 30) / 100)) return "surprised";
+    if (EX.running) return EX.state === "scan" ? "curious" : "happy";
+    if (AI.busy) return "thinking";
+    if (S.battery != null && S.battery < 15) return "sleepy";
+    return "calm";
+  }
+  function drawFace(ts) {
+    if (!FACE.on) return;
+    const c = $("face-canvas"), W = (c.width = innerWidth * devicePixelRatio), H = (c.height = innerHeight * devicePixelRatio);
+    const g = c.getContext("2d");
+    g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
+    const mood = faceMood();
+    // Eyes look toward the open direction / current turn.
+    const targetX = EX.running ? Math.max(-1, Math.min(1, -EX.lastTurn / 60 + (visFresh() ? VIS.steer * -0.6 : 0))) : (visFresh() ? -VIS.steer * 0.6 : Math.sin(ts / 2400) * 0.4);
+    FACE.lookX += (targetX - FACE.lookX) * 0.12;
+    FACE.lookY += ((mood === "thinking" ? -0.5 : mood === "sleepy" ? 0.4 : 0) - FACE.lookY) * 0.1;
+    if (ts > FACE.blinkAt) FACE.blinkAt = ts + 2200 + Math.random() * 3000;
+    const blink = Math.max(0, 1 - Math.abs(FACE.blinkAt - ts - 60) / 60); // 0..1 around blink moment
+    const portrait = H > W;
+    const eW = (portrait ? W * 0.32 : Math.min(W * 0.2, H * 0.45));
+    const eH = eW * (mood === "surprised" || mood === "scared" ? 1.45 : mood === "sleepy" ? 0.45 : mood === "happy" ? 0.95 : 1.15);
+    const gap = portrait ? W * 0.12 : eW * 0.7;
+    const cy = H * (portrait ? 0.42 : 0.5) + FACE.lookY * eH * 0.25;
+    const col = mood === "scared" ? "#ff6b5b" : mood === "surprised" ? "#ffd166" : "#5ff5e0";
+    g.fillStyle = col; g.shadowColor = col; g.shadowBlur = eW * 0.25;
+    for (const s of [-1, 1]) {
+      const cx = W / 2 + s * (eW / 2 + gap / 2) + FACE.lookX * eW * 0.35;
+      const h = Math.max(eW * 0.06, eH * (1 - blink));
+      const r = Math.min(eW, h) * 0.45;
+      g.beginPath(); g.roundRect(cx - eW / 2, cy - h / 2, eW, h, r); g.fill();
+      if (mood === "happy" && blink < 0.5) { g.fillStyle = "#000"; g.shadowBlur = 0; g.beginPath(); g.ellipse(cx, cy + h * 0.55, eW * 0.62, h * 0.45, 0, 0, Math.PI * 2); g.fill(); g.fillStyle = col; g.shadowBlur = eW * 0.25; }
+    }
+    g.shadowBlur = 0;
+    $("face-status").textContent = `${S.battery != null ? S.battery + "%" : ""}${S.charging ? " ⚡" : ""}${EX.running ? " · exploring" : ""}`;
+    FACE.raf = requestAnimationFrame(drawFace);
+  }
+
+  // ---- UI plumbing ----
+  function renderChars() {
+    const tb = $("chars"), sel = $("raw-char");
+    tb.textContent = ""; sel.textContent = "";
+    for (const [key, c] of chars) {
+      const p = c.properties;
+      const props = ["read", "write", "writeWithoutResponse", "notify", "indicate"].filter((k) => p[k]).join(", ");
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="mono">${key.toUpperCase()}</td><td>${ROLES[key] || "<em>Unknown — explore</em>"}</td><td class="mono">${props}</td>`;
+      tb.appendChild(tr);
+      if (p.write || p.writeWithoutResponse || p.read) {
+        const o = document.createElement("option");
+        o.value = key; o.textContent = `${key.toUpperCase()} · ${ROLES[key] || "unknown"}`;
+        sel.appendChild(o);
+      }
+    }
+    if (chars.has("fe00")) sel.value = "fe00";
+  }
+  function setEnabled(on) {
+    document.querySelectorAll("#btn-stop, [data-head], #head, #btn-light-on, #btn-light-off, #raw-char, #btn-raw, #btn-read, #btn-readall, #btn-handshake, #btn-disconnect")
+      .forEach((el) => { el.disabled = !on; });
+    $("btn-connect").disabled = on;
+    $("stick").setAttribute("aria-disabled", on ? "false" : "true");
+    if (!EX.running) { $("ex-start").disabled = !on; $("ex-cal").disabled = !on; $("tr-run").disabled = !on || !TR.profile; }
+    $("tr-rec").disabled = !on;
+    if (!on && TR.recording) toggleRecording();
+    if (!on && EX.running) stopExplore("robot disconnected");
+  }
+  $("btn-connect").addEventListener("click", connect);
+  $("btn-disconnect").addEventListener("click", () => { stopDrive("force"); setTimeout(() => device?.gatt?.disconnect(), 150); });
+  $("btn-handshake").addEventListener("click", handshake);
+  $("btn-clear").addEventListener("click", () => { logEl.textContent = ""; });
+  $("btn-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(logEl.innerText); log("sys", "Log copied."); }
+    catch { const r = document.createRange(); r.selectNodeContents(logEl); const s = getSelection(); s.removeAllRanges(); s.addRange(r); log("sys", "Clipboard blocked — log selected, press Ctrl+C."); }
+  });
+
+  if (!navigator.bluetooth) { $("nobt").hidden = false; $("btn-connect").disabled = true; }
+})();
+</script>
+</body>
+</html>
