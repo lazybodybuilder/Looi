@@ -22,10 +22,11 @@ A single-page controller for the TangibleFuture LOOI desk robot. It talks straig
 
 ## Run on the phone (Galaxy Z Flip 4 on LOOI)
 1. Force-stop the official LOOI app so it releases Bluetooth.
+1. Once, on the phone: open the console, and under *Remote control* press **Suggest** (or type 12+ characters), write the password down, and press **Set password**. Remote control stays off until a password is set.
 2. On the phone, open **https://lazybodybuilder.github.io/Looi/?remote=1** in Chrome. On the cover screen, use *CoverScreen OS* or Good Lock to launch Chrome there.
    Narrow screens show a compact layout with just **Connect LOOI** and the pairing code.
 3. Tap **Connect LOOI** and pick the robot. This is the only tap needed on the phone.
-4. On the PC, open **remote.html**, type the 6-letter code, and press Connect.
+4. On the PC, open **remote.html**, type the 6-letter code and the password, and press Connect. Tick **Remember on this PC** to skip the password next time.
 5. From the PC: **Camera on** (pick a camera from the list or press **Next camera**; the full list appears after the camera has started once), **Face on**, then drive, **Explore** or talk to the AI.
 6. Mount the folded phone with the cover screen and rear cameras facing forward.
 
@@ -41,6 +42,17 @@ To use your own signalling server, add `?peerhost=HOST&peerport=PORT&peersecure=
 2. **Speed**: Speed test (1 s at speed 100), measure the distance in mm, enter it as *mm/s at speed 100*.
 3. **Camera rotation**: rotate the view on the PC until it's upright. The phone uses the same setting to analyse the image.
 4. **Camera ranging** learns by itself while driving toward things the distance sensor can see.
+
+## Remote security
+The repository and the pages are public, so the only secret is the password, and the phone enforces it.
+
+- **Password → key.** The phone stores a key derived with PBKDF2-SHA256 (600,000 rounds, random salt), never the password itself. **Remember on this PC** stores the same derived key on the PC, per phone code.
+- **Login.** When a PC connects, the phone sends a fresh random challenge. The PC must answer with an HMAC over both sides' nonces and both peer IDs. Until it does, the phone shares nothing (no telemetry, video, settings or log) and ignores every command. The phone then proves itself back, so a fake "phone" can't fool the PC.
+- **Encrypted link.** Every message after login is AES-256-GCM encrypted with a key unique to that link. Each message is numbered, so a tampered, replayed or reordered message closes the link.
+- **Lockout.** After 5 wrong passwords the phone refuses logins for 1 minute, doubling each further miss up to 1 hour. Setting the password again clears the lockout.
+- **One PC at a time.** A PC that hasn't logged in can't hold the slot; it's replaced by the next one, or dropped after 20 s.
+- **Video and audio** only start for the logged-in PC, and the PC only accepts video from the phone it logged in to. The streams themselves use WebRTC's built-in encryption, whose keys are exchanged through the PeerJS signal server. For full end-to-end trust of the video as well, run your own PeerServer (`?peerhost=…` on both pages).
+- The 6-letter code is only an address; it isn't the secret. Changing the password ends any current PC link.
 
 ## Protocol (service `0x00FF`)
 | What | Where | Format |

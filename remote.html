@@ -31,6 +31,7 @@ h1 { font-size: 1.4rem; letter-spacing: .02em; }
 h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
 header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
 .pair { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pair input.pass { width: 13em; letter-spacing: normal; text-transform: none; font: 500 1rem var(--f-mono); }
 .pair input { width: 9.5em; font: 600 1.1rem var(--f-mono); letter-spacing: .15em; text-transform: lowercase; }
 input, select, textarea { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--tape); color: var(--fg); font: .9rem var(--f-body); min-width: 0; }
 button { font: 600 .9rem var(--f-body); border-radius: 8px; border: 1px solid var(--line); background: var(--tape); color: var(--fg); padding: 9px 14px; cursor: pointer; touch-action: manipulation; }
@@ -116,6 +117,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     </div>
     <form class="pair" id="pair">
       <input id="code" placeholder="code" autocomplete="off" spellcheck="false" aria-label="Pairing code from the phone" maxlength="6">
+      <input id="pass" class="pass" type="password" placeholder="password" autocomplete="current-password" spellcheck="false" aria-label="Remote password set on the phone">
+      <label class="toggle" title="Keeps a key derived from the password on this PC (not the password itself)"><input type="checkbox" id="remember"> Remember on this PC</label>
       <button class="primary" id="btn-pair" type="submit">Connect</button>
       <button id="btn-unpair" type="button" disabled>Disconnect</button>
     </form>
@@ -307,11 +310,93 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
-  const R = { peer: null, conn: null, tel: null, vec: { x: 0, y: 0 }, drivingSince: 0, keys: new Set(), stickPointer: null, sendTimer: null };
+  // ---- Link security (shared by the phone and the PC; keep both copies identical) ----
+  //   The repo is public, so nothing here is secret except the password. The phone holds a key derived from it
+  //   (PBKDF2-SHA256, 600k rounds, random salt). A PC must prove it knows the key (HMAC challenge-response with fresh
+  //   nonces from both sides) before the phone shares anything or accepts any command. The phone then proves itself
+  //   back, and every message after that is AES-GCM encrypted with a per-link key, numbered so replays are rejected.
+  const SEC = (() => {
+    const te = new TextEncoder(), td = new TextDecoder();
+    const b64 = (u8) => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+    const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+    const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+    const ITER = 600000;
+    async function derive(pass, salt, iter = ITER) {
+      const base = await crypto.subtle.importKey("raw", te.encode(pass.normalize("NFKC")), "PBKDF2", false, ["deriveBits"]);
+      return new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, base, 256));
+    }
+    async function mac(key, label) {
+      const k = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+      return new Uint8Array(await crypto.subtle.sign("HMAC", k, te.encode(label)));
+    }
+    function same(a, b) { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i]; return d === 0; }
+    // dir: 0 = phone sends, 1 = PC sends. Messages are { e: ciphertext, n: counter }; the counter is part of the IV.
+    async function session(key, transcript, dir) {
+      const aes = await crypto.subtle.importKey("raw", await mac(key, "looi-session|" + transcript), "AES-GCM", false, ["encrypt", "decrypt"]);
+      const iv = (d, n) => { const v = new Uint8Array(12); v[0] = d; new DataView(v.buffer).setUint32(4, Math.floor(n / 2 ** 32)); new DataView(v.buffer).setUint32(8, n >>> 0); return v; };
+      let sendN = 0, recvN = 0, sendQ = Promise.resolve(), recvQ = Promise.resolve();
+      return {
+        seal(obj) {
+          const n = ++sendN;
+          return (sendQ = sendQ.catch(() => {}).then(async () => ({ e: b64(new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv(dir, n) }, aes, te.encode(JSON.stringify(obj))))), n })));
+        },
+        open(m) {
+          return (recvQ = recvQ.catch(() => {}).then(async () => {
+            if (!m || typeof m.e !== "string" || !Number.isSafeInteger(m.n) || m.n <= recvN) throw new Error("unexpected or replayed message");
+            const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv(dir ^ 1, m.n) }, aes, unb64(m.e));
+            recvN = m.n;
+            return JSON.parse(td.decode(pt));
+          }));
+        },
+      };
+    }
+    return { b64, unb64, rand, derive, mac, same, session, ITER };
+  })();
+
+  const R = { peer: null, conn: null, sess: null, tel: null, vec: { x: 0, y: 0 }, drivingSince: 0, keys: new Set(), stickPointer: null, sendTimer: null };
 
   function chip(id, text, state) { const el = $(id); el.textContent = text; el.className = "chip " + (state || ""); }
   function note(msg) { const n = $("note"); n.textContent = msg; n.hidden = false; clearTimeout(note.t); note.t = setTimeout(() => (n.hidden = true), 6000); }
-  function send(m) { try { if (R.conn?.open) R.conn.send(m); } catch {} }
+  function send(m) {
+    if (!R.sess || !R.conn?.open) return;
+    const c = R.conn;
+    R.sess.seal(m).then((x) => { if (R.conn === c && c.open) c.send(x); }).catch(() => {});
+  }
+  // Remembered keys: one per phone code, only the derived key and its salt.
+  const keyStoreName = (code) => "looi-remote-key-" + code;
+  function keyLoad(code) { try { const k = JSON.parse(localStorage.getItem(keyStoreName(code))); return k ? { salt: k.salt, iter: k.iter, key: SEC.unb64(k.key) } : null; } catch { return null; } }
+  function keySave(code, salt, iter, key) { try { localStorage.setItem(keyStoreName(code), JSON.stringify({ salt, iter, key: SEC.b64(key) })); } catch {} }
+  function keyForget(code) { try { localStorage.removeItem(keyStoreName(code)); } catch {} }
+  // The phone's login challenge: prove we know the key, then check the phone proves it too.
+  async function authAnswer(c, code, d) {
+    if (typeof d.salt !== "string" || typeof d.nP !== "string" || !(d.iter >= 100000 && d.iter <= 10000000)) { note("The phone sent an unexpected login request."); unlink(); return; }
+    let key = null;
+    const kept = keyLoad(code);
+    if (kept && kept.salt === d.salt && kept.iter === d.iter) key = kept.key;
+    else {
+      const pass = $("pass").value;
+      if (!pass) { note("Enter the remote password you set on the phone."); unlink(); $("pass").focus(); return; }
+      chip("st-link", "Checking password…", "warn");
+      key = await SEC.derive(pass, SEC.unb64(d.salt), d.iter);
+    }
+    if (R.conn !== c) return;
+    const nC = SEC.b64(SEC.rand(32)), T = `${d.nP}|${nC}|looi-${code}|${R.peer.id}`;
+    R.pending = { key, T, salt: d.salt, iter: d.iter, code };
+    c.send({ t: "auth-response", nC, proof: SEC.b64(await SEC.mac(key, "looi-pc|" + T)) });
+  }
+  async function authDone(c, d) {
+    const P = R.pending; R.pending = null;
+    if (!P || typeof d.proof !== "string" || !SEC.same(await SEC.mac(P.key, "looi-phone|" + P.T), SEC.unb64(d.proof))) {
+      note("The other end didn't prove it knows the password, so this isn't your phone. Disconnected."); unlink(); return;
+    }
+    if (R.conn !== c) return;
+    R.sess = await SEC.session(P.key, P.T, 1);
+    if ($("remember").checked) keySave(P.code, P.salt, P.iter, P.key); else keyForget(P.code);
+    $("pass").value = "";
+    chip("st-link", "Linked · " + P.code, "ok");
+    $("btn-unpair").disabled = false; $("btn-pair").disabled = true; $("btn-stop").disabled = false;
+    addLog("sys", "Logged in to the phone. The link is encrypted.");
+  }
   function addLog(kind, line) {
     if (/← FED9|← FED8|→ FED0|→ FED1/.test(line) && !$("log-raw").checked) return; // routine packets flood the log
     const span = document.createElement("span"); span.className = kind; span.textContent = line + "\n";
@@ -332,6 +417,9 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   // ---- Pairing ----
   try { const c = localStorage.getItem("looi-remote-last"); if (c) $("code").value = c; } catch {}
   const q0 = new URLSearchParams(location.search).get("code"); if (q0) $("code").value = q0;
+  const syncRemember = () => { const c = $("code").value.trim().toLowerCase(); $("remember").checked = !!keyLoad(c); $("pass").placeholder = keyLoad(c) ? "password (remembered)" : "password"; };
+  $("code").addEventListener("input", syncRemember); syncRemember();
+  $("remember").addEventListener("change", () => { if (!$("remember").checked) { keyForget($("code").value.trim().toLowerCase()); $("pass").placeholder = "password"; } });
   $("pair").addEventListener("submit", (e) => { e.preventDefault(); link(); });
   $("btn-unpair").addEventListener("click", () => unlink("Disconnected."));
 
@@ -345,15 +433,21 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     R.peer = new Peer(undefined, peerOptions());
     R.peer.on("open", () => {
       R.conn = R.peer.connect("looi-" + code, { reliable: true });
-      R.conn.on("open", () => {
-        chip("st-link", "Linked · " + code, "ok");
-        $("btn-unpair").disabled = false; $("btn-pair").disabled = true; $("btn-stop").disabled = false;
-        addLog("sys", "Linked to the phone.");
+      const c = R.conn;
+      c.on("open", () => { chip("st-link", "Logging in…", "warn"); $("btn-unpair").disabled = false; });
+      c.on("data", (d) => {
+        if (R.conn !== c || !d || typeof d !== "object") return;
+        if (R.sess) { R.sess.open(d).then((m) => { try { onData(m); } catch (e) { console.error(e); } }).catch(() => { note("A message from the phone failed its security check. Disconnected."); unlink(); }); return; }
+        if (d.t === "busy") { note("Another computer is already controlling this LOOI."); unlink(); return; }
+        if (d.t === "auth-locked") { note(`Too many wrong passwords. The phone accepts logins again at ${new Date(d.until).toLocaleTimeString()}.`); unlink(); return; }
+        if (d.t === "auth-fail") { keyForget(code); note("Wrong password."); unlink(); $("pass").focus(); return; }
+        if (d.t === "auth-challenge") { authAnswer(c, code, d).catch((e) => { note("Login failed: " + e.message); unlink(); }); return; }
+        if (d.t === "auth-ok") { authDone(c, d).catch((e) => { note("Login failed: " + e.message); unlink(); }); return; }
       });
-      R.conn.on("data", onData);
-      R.conn.on("close", () => unlink("The phone closed the link."));
+      c.on("close", () => { if (R.conn === c) unlink(R.sess ? "The phone closed the link." : null); });
     });
     R.peer.on("call", (call) => {
+      if (!R.sess || call.peer !== "looi-" + code) { call.close(); return; } // video only from the phone we logged in to
       call.answer();
       call.on("stream", (stream) => { $("video").srcObject = stream; $("video-empty").hidden = true; });
       call.on("close", () => {
@@ -370,7 +464,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     stopDriveSend(true);
     try { R.conn?.close(); } catch {}
     try { R.peer?.destroy(); } catch {}
-    R.conn = null; R.peer = null; R.tel = null;
+    R.conn = null; R.peer = null; R.tel = null; R.sess = null; R.pending = null;
     $("video").srcObject = null; $("video-empty").hidden = false;
     $("btn-unpair").disabled = true; $("btn-pair").disabled = false; $("btn-stop").disabled = true;
     chip("st-link", "Not linked"); chip("st-ble", "Robot —"); chip("st-batt", "Robot battery —"); chip("st-pbatt", "Phone —");
@@ -380,7 +474,6 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   // ---- Incoming ----
   function onData(d) {
     if (!d || typeof d !== "object") return;
-    if (d.t === "busy") { note("Another computer is already controlling this LOOI."); unlink(); return; }
     if (d.t === "hello") {
       if (d.settings?.["vis-rot"] != null) { VIEW.deg = Number(d.settings["vis-rot"]) || 0; VIEW.mirror = !!d.settings["vis-mirror"]; applyView(); }
       document.querySelectorAll("[data-set]").forEach((el) => {
@@ -499,7 +592,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
     R.vec = { x: dx / radius, y: -dy / radius };
   }
-  stick.addEventListener("pointerdown", (e) => { if (!R.conn?.open) return; e.preventDefault(); R.stickPointer = e.pointerId; stick.setPointerCapture?.(e.pointerId); stick.classList.add("active"); setFromPointer(e); startDriveSend(); });
+  stick.addEventListener("pointerdown", (e) => { if (!R.sess) return; e.preventDefault(); R.stickPointer = e.pointerId; stick.setPointerCapture?.(e.pointerId); stick.classList.add("active"); setFromPointer(e); startDriveSend(); });
   stick.addEventListener("pointermove", (e) => { if (e.pointerId === R.stickPointer) setFromPointer(e); });
   ["pointerup", "pointercancel", "lostpointercapture"].forEach((ev) => stick.addEventListener(ev, (e) => { if (e.pointerId === R.stickPointer) { R.stickPointer = null; stopDriveSend(true); } }));
 
@@ -524,7 +617,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   }
   const isTextField = (el) => el.matches("textarea, input:not([type]), input[type=text], input[type=password], input[type=number], input[type=search]");
   document.addEventListener("keydown", (e) => {
-    if (isTextField(e.target) || !R.conn?.open) return;
+    if (isTextField(e.target) || !R.sess) return;
     const k = e.key.toLowerCase();
     if (k.startsWith("arrow") && e.target.matches("select, input[type=range], input[type=checkbox], button")) e.target.blur(); // arrows always drive
     if (k === " ") { e.preventDefault(); stopAll(); return; }
@@ -712,7 +805,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   let ptt = null;
   async function pttStart(e) {
     e?.preventDefault?.();
-    if (ptt || !R.peer || !R.conn?.open) return;
+    if (ptt || !R.peer || !R.sess) return;
     try {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
       ptt = { mic, call: R.peer.call(R.conn.peer, mic) };
@@ -728,7 +821,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   $("btn-ptt").addEventListener("pointerdown", pttStart);
   ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => $("btn-ptt").addEventListener(ev, pttStop));
 
-  if (q0) link();
+  if (q0) { if (keyLoad(q0.trim().toLowerCase())) link(); else $("pass").focus(); } // ?code= links straight away only when this PC remembers the key
 })();
 </script>
 </body>

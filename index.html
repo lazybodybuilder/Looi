@@ -204,7 +204,13 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
       <button id="rem-stop" disabled>Turn off</button>
       <button id="rem-new">New code</button>
     </div>
-    <p class="hint">On your PC, open <b>lazybodybuilder.github.io/Looi/remote.html</b> and type this code. Video and controls go straight between the two devices; a free PeerJS server only introduces them. Opening this page with <code>?remote=1</code> at the end turns remote control on by itself, so on the cover screen you only need to tap <b>Connect LOOI</b>.</p>
+    <div class="row">
+      <input id="rem-pass" type="password" placeholder="Remote password (12+ characters)" autocomplete="new-password" spellcheck="false" style="flex: 1; min-width: 0;">
+      <button id="rem-pass-gen" type="button" title="Suggest a strong random password">Suggest</button>
+      <button id="rem-pass-set" type="button">Set password</button>
+    </div>
+    <p class="hint" id="rem-pass-state">No password set. Remote control stays off until you set one.</p>
+    <p class="hint">On your PC, open <b>lazybodybuilder.github.io/Looi/remote.html</b> and type this code. The PC must also know the remote password: the phone checks it before sharing anything, and everything after that is encrypted. Video and controls go straight between the two devices; a free PeerJS server only introduces them. Opening this page with <code>?remote=1</code> at the end turns remote control on by itself, so on the cover screen you only need to tap <b>Connect LOOI</b>.</p>
   </section>
 
   <div class="grid">
@@ -1685,7 +1691,7 @@ You control a real robot on a real desk. Rules:
       const sel = $("cam-select"), keep = sel.value;
       sel.innerHTML = '<option value="">Rear camera (default)</option>' + devs.map((d, i) => `<option value="${d.deviceId}">${d.label || "Camera " + (i + 1)}</option>`).join("");
       sel.value = [...sel.options].some((o) => o.value === keep) ? keep : "";
-      if (typeof remSend === "function" && REM.conn?.open) remSend({ t: "cams", cams: camList() });
+      if (typeof remSend === "function") remSend({ t: "cams", cams: camList() });
     } catch {}
   }
   async function startCamera() {
@@ -1976,7 +1982,7 @@ You control a real robot on a real desk. Rules:
       g.fillStyle = "rgba(120,190,255,.85)";
       FS.sweat = FS.sweat.filter((d) => { d.y += d.v; g.beginPath(); g.ellipse(d.x, d.y, W * 0.012, W * 0.02, 0, 0, Math.PI * 2); g.fill(); return d.y < H * 0.4; });
     } else FS.sweat = [];
-    $("face-status").textContent = `${S.battery != null ? S.battery + "%" : ""}${S.charging ? " ⚡" : ""}${EX.running ? " · exploring" : ""}${REM.peer && !REM.conn?.open ? " · remote code " + REM.code : REM.conn?.open ? " · PC linked" : ""}`;
+    $("face-status").textContent = `${S.battery != null ? S.battery + "%" : ""}${S.charging ? " ⚡" : ""}${EX.running ? " · exploring" : ""}${REM.peer && !remLinked() ? " · remote code " + REM.code : remLinked() ? " · PC linked" : ""}`;
     FACE.raf = requestAnimationFrame(drawFace);
   }
 
@@ -2183,7 +2189,7 @@ You control a real robot on a real desk. Rules:
   //   PeerJS (WebRTC) data channel for commands + telemetry, media call for the camera.
   //   The phone stays in charge of safety: deadman on remote driving, forward block, cliff latch.
   // ===================================================================
-  var REM = { peer: null, conn: null, call: null, code: null, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
+  var REM = { peer: null, conn: null, call: null, code: null, sess: null, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
   const REMOTE_SETTINGS = ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-lights", "ex-tilt", "ex-react", "ex-peek",
     "vis-block", "vis-tol", "vis-fov", "vis-rot", "vis-mirror", "nav-speed", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
   function remCode(fresh) {
@@ -2200,13 +2206,114 @@ You control a real robot on a real desk. Rules:
     if (!q.get("peerhost")) return { debug: 1 };
     return { host: q.get("peerhost"), port: Number(q.get("peerport") || 443), path: q.get("peerpath") || "/", secure: q.get("peersecure") !== "0", debug: 1 };
   }
+  // ---- Link security (shared by the phone and the PC; keep both copies identical) ----
+  //   The repo is public, so nothing here is secret except the password. The phone holds a key derived from it
+  //   (PBKDF2-SHA256, 600k rounds, random salt). A PC must prove it knows the key (HMAC challenge-response with fresh
+  //   nonces from both sides) before the phone shares anything or accepts any command. The phone then proves itself
+  //   back, and every message after that is AES-GCM encrypted with a per-link key, numbered so replays are rejected.
+  const SEC = (() => {
+    const te = new TextEncoder(), td = new TextDecoder();
+    const b64 = (u8) => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+    const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+    const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
+    const ITER = 600000;
+    async function derive(pass, salt, iter = ITER) {
+      const base = await crypto.subtle.importKey("raw", te.encode(pass.normalize("NFKC")), "PBKDF2", false, ["deriveBits"]);
+      return new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, base, 256));
+    }
+    async function mac(key, label) {
+      const k = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+      return new Uint8Array(await crypto.subtle.sign("HMAC", k, te.encode(label)));
+    }
+    function same(a, b) { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i]; return d === 0; }
+    // dir: 0 = phone sends, 1 = PC sends. Messages are { e: ciphertext, n: counter }; the counter is part of the IV.
+    async function session(key, transcript, dir) {
+      const aes = await crypto.subtle.importKey("raw", await mac(key, "looi-session|" + transcript), "AES-GCM", false, ["encrypt", "decrypt"]);
+      const iv = (d, n) => { const v = new Uint8Array(12); v[0] = d; new DataView(v.buffer).setUint32(4, Math.floor(n / 2 ** 32)); new DataView(v.buffer).setUint32(8, n >>> 0); return v; };
+      let sendN = 0, recvN = 0, sendQ = Promise.resolve(), recvQ = Promise.resolve();
+      return {
+        seal(obj) {
+          const n = ++sendN;
+          return (sendQ = sendQ.catch(() => {}).then(async () => ({ e: b64(new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv(dir, n) }, aes, te.encode(JSON.stringify(obj))))), n })));
+        },
+        open(m) {
+          return (recvQ = recvQ.catch(() => {}).then(async () => {
+            if (!m || typeof m.e !== "string" || !Number.isSafeInteger(m.n) || m.n <= recvN) throw new Error("unexpected or replayed message");
+            const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv(dir ^ 1, m.n) }, aes, unb64(m.e));
+            recvN = m.n;
+            return JSON.parse(td.decode(pt));
+          }));
+        },
+      };
+    }
+    return { b64, unb64, rand, derive, mac, same, session, ITER };
+  })();
+
+  // Phone side of the login. Stored: { salt, iter, key } (the derived key, never the password) plus the lockout state.
+  const AUTH_KEY = "looi-remote-auth", LOCK_KEY = "looi-remote-lock";
+  function authGet() { try { const a = JSON.parse(localStorage.getItem(AUTH_KEY)); return a?.key ? { salt: SEC.unb64(a.salt), iter: a.iter, key: SEC.unb64(a.key) } : null; } catch { return null; } }
+  function lockGet() { try { return JSON.parse(localStorage.getItem(LOCK_KEY)) || { fails: 0, until: 0 }; } catch { return { fails: 0, until: 0 }; } }
+  function lockSet(v) { try { localStorage.setItem(LOCK_KEY, JSON.stringify(v)); } catch {} }
+  function authShow() {
+    const a = authGet(), L = lockGet();
+    $("rem-pass-state").textContent = !a ? "No password set. Remote control stays off until you set one."
+      : L.until > Date.now() ? `Password set. Locked after ${L.fails} wrong attempts until ${new Date(L.until).toLocaleTimeString()} (setting the password again clears this).`
+      : "Password set ✓. A PC needs it to link.";
+  }
+  async function authSetPassword() {
+    const pass = $("rem-pass").value;
+    if (pass.length < 12) { log("err", "Remote password: use at least 12 characters (Suggest makes a strong one)."); return; }
+    $("rem-pass-set").disabled = true; $("rem-pass-state").textContent = "Securing…";
+    try {
+      const salt = SEC.rand(16), key = await SEC.derive(pass, salt);
+      localStorage.setItem(AUTH_KEY, JSON.stringify({ v: 1, salt: SEC.b64(salt), iter: SEC.ITER, key: SEC.b64(key) }));
+      lockSet({ fails: 0, until: 0 });
+      $("rem-pass").value = ""; $("rem-pass").type = "password";
+      if (REM.conn) remDropped("password changed, the PC has to log in again");
+      log("sys", "Remote password set. Write it down: the phone only keeps a key derived from it.");
+    } catch (e) { log("err", "Remote password: " + e.message); }
+    $("rem-pass-set").disabled = false; authShow();
+  }
+  function authSuggest() {
+    const alpha = "abcdefghjkmnpqrstuvwxyz23456789"; // 31 symbols, 16 of them ≈ 79 bits
+    const r = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => alpha[b % alpha.length]).join("");
+    $("rem-pass").type = "text"; $("rem-pass").value = r.match(/.{4}/g).join("-");
+  }
+  function authFailed(c, why) {
+    const L = lockGet(); L.fails += 1;
+    if (L.fails >= 5) L.until = Date.now() + Math.min(3600e3, 60e3 * 2 ** (L.fails - 5));
+    lockSet(L);
+    log("err", `Remote: a PC failed to log in (${why}, attempt ${L.fails}).${L.until > Date.now() ? " Remote login locked until " + new Date(L.until).toLocaleTimeString() + "." : ""}`);
+    try { c.send({ t: "auth-fail" }); } catch {}
+    setTimeout(() => { try { c.close(); } catch {} }, 300);
+    authShow();
+  }
+  async function authCheck(c, nP, d) {
+    const a = authGet();
+    if (!a || d?.t !== "auth-response" || typeof d.nC !== "string" || typeof d.proof !== "string") return authFailed(c, "bad login message");
+    const T = `${nP}|${d.nC}|${REM.peer.id}|${c.peer}`;
+    let ok = false;
+    try { ok = SEC.same(await SEC.mac(a.key, "looi-pc|" + T), SEC.unb64(d.proof)); } catch {}
+    if (!ok) return authFailed(c, "wrong password");
+    if (REM.conn !== c || !c.open) return;
+    lockSet({ fails: 0, until: 0 });
+    REM.sess = await SEC.session(a.key, T, 0);
+    c.send({ t: "auth-ok", proof: SEC.b64(await SEC.mac(a.key, "looi-phone|" + T)) });
+    remLinkedUp();
+  }
+  const remLinked = () => !!(REM.sess && REM.conn?.open);
   function remStatus(text, state) { chip("st-remote", text, state); }
-  function remSend(msg) { try { if (REM.conn?.open) REM.conn.send(msg); } catch {} }
+  function remSend(msg) {
+    if (!remLinked()) return;
+    const c = REM.conn;
+    REM.sess.seal(msg).then((m) => { if (REM.conn === c && c.open) c.send(m); }).catch(() => {});
+  }
   function remNote(msg) { remSend({ t: "note", msg }); }
 
   function remoteStart(fresh = false) {
     if (REM.peer && !fresh) return;
     if (!window.Peer) { remStatus("Remote unavailable", "bad"); log("err", "Remote: the PeerJS library didn't load. Check the internet connection and reload."); return; }
+    if (!authGet()) { remStatus("Set a password", "bad"); log("err", "Remote: set a remote password first (Remote control panel), then allow remote control."); authShow(); return; }
     remoteStop(true);
     REM.code = remCode(fresh);
     $("rem-code").textContent = REM.code;
@@ -2214,22 +2321,40 @@ You control a real robot on a real desk. Rules:
     REM.peer = new Peer("looi-" + REM.code, peerOptions());
     REM.peer.on("open", () => { remStatus("Waiting for PC", "warn"); log("sys", `Remote: ready. On your PC, open remote.html and enter code ${REM.code}`); });
     REM.peer.on("connection", (c) => {
-      if (REM.conn?.open) { c.on("open", () => { c.send({ t: "busy" }); setTimeout(() => c.close(), 300); }); return; }
-      REM.conn = c;
+      // One logged-in PC at a time. A PC that hasn't logged in yet can't hold the slot: a newer one replaces it.
+      if (remLinked()) { c.on("open", () => { c.send({ t: "busy" }); setTimeout(() => c.close(), 300); }); return; }
+      if (REM.conn) { const old = REM.conn; REM.conn = null; try { old.close(); } catch {} }
+      REM.conn = c; REM.sess = null;
+      let nP = null, answered = false;
       c.on("open", () => {
-        remStatus("PC connected", "ok");
-        log("sys", "Remote: PC connected.");
-        remSend({ t: "hello", code: REM.code, settings: Object.fromEntries(REMOTE_SETTINGS.filter((id) => $(id)).map((id) => [id, $(id).type === "checkbox" ? $(id).checked : $(id).value])), cams: camList(), profile: TR.profile });
-        remCallVideo();
-        clearInterval(REM.telTimer); REM.telTimer = setInterval(remTelemetry, 250);
+        const L = lockGet();
+        if (L.until > Date.now()) { c.send({ t: "auth-locked", until: L.until }); setTimeout(() => c.close(), 300); return; }
+        const a = authGet();
+        if (!a) { c.close(); return; }
+        nP = SEC.b64(SEC.rand(32));
+        c.send({ t: "auth-challenge", v: 1, salt: SEC.b64(a.salt), iter: a.iter, nP });
+        remStatus("PC logging in…", "warn");
+        setTimeout(() => { if (REM.conn === c && !REM.sess) { log("sys", "Remote: a PC connected but didn't log in; closed."); try { c.close(); } catch {} } }, 20000);
       });
-      c.on("data", (d) => remHandle(d).catch((e) => log("err", "Remote command failed: " + e.message)));
-      c.on("close", () => remDropped("PC disconnected"));
+      c.on("data", (d) => {
+        if (REM.conn !== c) return;
+        if (!REM.sess) {
+          if (!nP || answered) return;
+          answered = true;
+          authCheck(c, nP, d).catch((e) => authFailed(c, e.message));
+          return;
+        }
+        REM.sess.open(d).then((m) => remHandle(m)).catch((e) => {
+          if (e?.name === "OperationError" || /replayed/.test(e?.message)) { log("err", "Remote: a message failed its security check; link closed."); remDropped("security check failed"); }
+          else log("err", "Remote command failed: " + e.message);
+        });
+      });
+      c.on("close", () => { if (REM.conn === c) remDropped(REM.sess ? "PC disconnected" : null); });
       c.on("error", (e) => log("err", "Remote link: " + (e.message || e.type)));
     });
     REM.peer.on("disconnected", () => { try { REM.peer.reconnect(); } catch {} });
     REM.peer.on("call", (call) => {
-      if (!REM.conn?.open || call.peer !== REM.conn.peer) { call.close(); return; } // only the linked PC may talk
+      if (!remLinked() || call.peer !== REM.conn.peer) { call.close(); return; } // only the logged-in PC may talk
       call.answer();
       call.on("stream", (stream) => {
         const a = $("rem-audio"); a.srcObject = stream;
@@ -2242,6 +2367,13 @@ You control a real robot on a real desk. Rules:
       else { log("err", `Remote: ${e.type || ""} ${e.message}`); if (e.type === "network" || e.type === "server-error") remStatus("No signal server", "bad"); }
     });
     $("rem-start").disabled = true; $("rem-stop").disabled = false;
+  }
+  function remLinkedUp() {
+    remStatus("PC connected", "ok");
+    log("sys", "Remote: PC logged in.");
+    remSend({ t: "hello", code: REM.code, settings: Object.fromEntries(REMOTE_SETTINGS.filter((id) => $(id)).map((id) => [id, $(id).type === "checkbox" ? $(id).checked : $(id).value])), cams: camList(), profile: TR.profile });
+    remCallVideo();
+    clearInterval(REM.telTimer); REM.telTimer = setInterval(remTelemetry, 250);
   }
   function remoteStop(quiet) {
     remDropped(null);
@@ -2256,12 +2388,13 @@ You control a real robot on a real desk. Rules:
     try { REM.call?.close(); } catch {}
     REM.call = null;
     try { REM.conn?.close(); } catch {}
-    REM.conn = null;
+    REM.conn = null; REM.sess = null;
+    if (REM.peer) remStatus("Waiting for PC", "warn");
     if (REM.safetyOff) { REM.safetyOff = false; log("sys", "Remote: safety checks back on (PC left)."); }
     if (why) { log("sys", "Remote: " + why + "."); if (REM.peer) remStatus("Waiting for PC", "warn"); }
   }
   function remCallVideo() {
-    if (!REM.peer || !REM.conn?.open) return;
+    if (!REM.peer || !remLinked()) return;
     try { REM.call?.close(); } catch {}
     REM.call = null;
     const tracks = [...(VIS.stream?.active ? VIS.stream.getVideoTracks() : []), ...(AUD.mic?.active ? AUD.mic.getAudioTracks() : [])];
@@ -2278,7 +2411,7 @@ You control a real robot on a real desk. Rules:
   const camList = () => [...$("cam-select").options].map((o) => ({ id: o.value, label: o.textContent }));
 
   function remTelemetry() {
-    if (!REM.conn?.open) return;
+    if (!remLinked()) return;
     remSend({
       t: "tel",
       ble: !!device?.gatt?.connected, name: device?.name || null,
@@ -2373,7 +2506,11 @@ You control a real robot on a real desk. Rules:
   $("rem-new").addEventListener("click", () => remoteStart(true));
   if (new URLSearchParams(location.search).get("remote") === "1") setTimeout(() => remoteStart(), 300);
 
-  window.REM_FORWARD = (m) => { if (REM.conn?.open) { try { REM.conn.send(m); } catch {} } };
+  window.REM_FORWARD = (m) => remSend(m);
+  $("rem-pass-set").addEventListener("click", authSetPassword);
+  $("rem-pass-gen").addEventListener("click", authSuggest);
+  $("rem-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") authSetPassword(); });
+  authShow();
 
   // ---- UI plumbing ----
   function renderChars() {
