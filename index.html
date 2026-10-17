@@ -2189,7 +2189,7 @@ You control a real robot on a real desk. Rules:
   //   PeerJS (WebRTC) data channel for commands + telemetry, media call for the camera.
   //   The phone stays in charge of safety: deadman on remote driving, forward block, cliff latch.
   // ===================================================================
-  var REM = { peer: null, conn: null, call: null, code: null, sess: null, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
+  var REM = { peer: null, conn: null, call: null, code: null, sess: null, lastRx: 0, media: {}, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
   const REMOTE_SETTINGS = ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-lights", "ex-tilt", "ex-react", "ex-peek",
     "vis-block", "vis-tol", "vis-fov", "vis-rot", "vis-mirror", "nav-speed", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
   function remCode(fresh) {
@@ -2246,7 +2246,33 @@ You control a real robot on a real desk. Rules:
         },
       };
     }
-    return { b64, unb64, rand, derive, mac, same, session, ITER };
+    // Media calls (video, audio) carry their own DTLS keys, exchanged through the signal server. Each side reports the
+    // certificate fingerprints it sees over the encrypted channel; if a relay swapped in its own keys they won't match.
+    const fpOf = (sdp) => (String(sdp || "").match(/^a=fingerprint:.*$/gm) || []).map((l) => l.trim().toLowerCase()).sort().join(",");
+    function watchMedia(call, report, onBad) {
+      const st = { mine: null, theirs: null, ok: false, done: false };
+      let tries = 0;
+      const poll = setInterval(() => {
+        const pc = call.peerConnection;
+        if (++tries > 75 || st.done) return clearInterval(poll);
+        if (!pc?.localDescription?.sdp || !pc?.remoteDescription?.sdp) return;
+        clearInterval(poll);
+        st.mine = { local: fpOf(pc.localDescription.sdp), remote: fpOf(pc.remoteDescription.sdp) };
+        report({ t: "media-fp", id: call.connectionId, local: st.mine.local, remote: st.mine.remote });
+        st.check();
+      }, 200);
+      st.check = () => {
+        if (st.done || !st.mine || !st.theirs) return;
+        st.done = true;
+        st.ok = !!st.mine.local && st.mine.local === st.theirs.remote && st.mine.remote === st.theirs.local;
+        if (!st.ok) onBad("its encryption keys don't match on both ends");
+      };
+      st.theirsIn = (m) => { st.theirs = { local: String(m.local), remote: String(m.remote) }; st.check(); };
+      const timer = setTimeout(() => { if (!st.done) { st.done = true; onBad("it couldn't be verified in time"); } }, 15000);
+      call.on("close", () => { st.done = true; clearInterval(poll); clearTimeout(timer); });
+      return st;
+    }
+    return { b64, unb64, rand, derive, mac, same, session, ITER, fpOf, watchMedia };
   })();
 
   // Phone side of the login. Stored: { salt, iter, key } (the derived key, never the password) plus the lockout state.
@@ -2344,7 +2370,7 @@ You control a real robot on a real desk. Rules:
           authCheck(c, nP, d).catch((e) => authFailed(c, e.message));
           return;
         }
-        REM.sess.open(d).then((m) => remHandle(m)).catch((e) => {
+        REM.sess.open(d).then((m) => { REM.lastRx = Date.now(); return remHandle(m); }).catch((e) => {
           if (e?.name === "OperationError" || /replayed/.test(e?.message)) { log("err", "Remote: a message failed its security check; link closed."); remDropped("security check failed"); }
           else log("err", "Remote command failed: " + e.message);
         });
@@ -2356,6 +2382,7 @@ You control a real robot on a real desk. Rules:
     REM.peer.on("call", (call) => {
       if (!remLinked() || call.peer !== REM.conn.peer) { call.close(); return; } // only the logged-in PC may talk
       call.answer();
+      remWatchMedia(call);
       call.on("stream", (stream) => {
         const a = $("rem-audio"); a.srcObject = stream;
         a.play().then(() => log("sys", "Speaker: playing your voice from the PC.")).catch(() => remNote("The phone blocked audio playback. Tap the phone screen once, then try again."));
@@ -2373,7 +2400,17 @@ You control a real robot on a real desk. Rules:
     log("sys", "Remote: PC logged in.");
     remSend({ t: "hello", code: REM.code, settings: Object.fromEntries(REMOTE_SETTINGS.filter((id) => $(id)).map((id) => [id, $(id).type === "checkbox" ? $(id).checked : $(id).value])), cams: camList(), profile: TR.profile });
     remCallVideo();
+    REM.lastRx = Date.now();
     clearInterval(REM.telTimer); REM.telTimer = setInterval(remTelemetry, 250);
+  }
+  // Media calls only count once both ends agree on their encryption keys (see SEC.watchMedia).
+  function remWatchMedia(call) {
+    REM.media[call.connectionId] = SEC.watchMedia(call, remSend, (why) => {
+      log("err", `Remote: closed a ${call === REM.call ? "video" : "audio"} call because ${why}. Someone may be interfering with the link.`);
+      remNote(`The phone closed a media call because ${why}.`);
+      try { call.close(); } catch {}
+    });
+    call.on("close", () => { delete REM.media[call.connectionId]; });
   }
   function remoteStop(quiet) {
     remDropped(null);
@@ -2398,7 +2435,7 @@ You control a real robot on a real desk. Rules:
     try { REM.call?.close(); } catch {}
     REM.call = null;
     const tracks = [...(VIS.stream?.active ? VIS.stream.getVideoTracks() : []), ...(AUD.mic?.active ? AUD.mic.getAudioTracks() : [])];
-    if (tracks.length) REM.call = REM.peer.call(REM.conn.peer, new MediaStream(tracks));
+    if (tracks.length) { REM.call = REM.peer.call(REM.conn.peer, new MediaStream(tracks)); if (REM.call) remWatchMedia(REM.call); }
     remSend({ t: "video", on: !!VIS.stream?.active });
   }
 
@@ -2412,6 +2449,7 @@ You control a real robot on a real desk. Rules:
 
   function remTelemetry() {
     if (!remLinked()) return;
+    if (Date.now() - REM.lastRx > 6000) { remDropped("the PC went quiet"); return; } // the PC pings every 1.5 s; tabs that vanish don't always say goodbye
     remSend({
       t: "tel",
       ble: !!device?.gatt?.connected, name: device?.name || null,
@@ -2452,6 +2490,9 @@ You control a real robot on a real desk. Rules:
     if (!d || typeof d !== "object") return;
     const clamp = (v) => Math.max(-127, Math.min(127, Math.round(Number(v) || 0)));
     switch (d.t) {
+      case "ping": break;
+      case "bye": remDropped("PC disconnected"); break;
+      case "media-fp": REM.media[d.id]?.theirsIn(d); break;
       // d.r = turn (d.t is the message type)
       case "drive": REM.vec = { f: clamp(d.f), t: clamp(d.r) }; REM.lastDrive = Date.now(); if (REM.vec.f || REM.vec.t) remDriveLoop(); break;
       case "stop":

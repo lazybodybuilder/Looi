@@ -350,10 +350,36 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
         },
       };
     }
-    return { b64, unb64, rand, derive, mac, same, session, ITER };
+    // Media calls (video, audio) carry their own DTLS keys, exchanged through the signal server. Each side reports the
+    // certificate fingerprints it sees over the encrypted channel; if a relay swapped in its own keys they won't match.
+    const fpOf = (sdp) => (String(sdp || "").match(/^a=fingerprint:.*$/gm) || []).map((l) => l.trim().toLowerCase()).sort().join(",");
+    function watchMedia(call, report, onBad) {
+      const st = { mine: null, theirs: null, ok: false, done: false };
+      let tries = 0;
+      const poll = setInterval(() => {
+        const pc = call.peerConnection;
+        if (++tries > 75 || st.done) return clearInterval(poll);
+        if (!pc?.localDescription?.sdp || !pc?.remoteDescription?.sdp) return;
+        clearInterval(poll);
+        st.mine = { local: fpOf(pc.localDescription.sdp), remote: fpOf(pc.remoteDescription.sdp) };
+        report({ t: "media-fp", id: call.connectionId, local: st.mine.local, remote: st.mine.remote });
+        st.check();
+      }, 200);
+      st.check = () => {
+        if (st.done || !st.mine || !st.theirs) return;
+        st.done = true;
+        st.ok = !!st.mine.local && st.mine.local === st.theirs.remote && st.mine.remote === st.theirs.local;
+        if (!st.ok) onBad("its encryption keys don't match on both ends");
+      };
+      st.theirsIn = (m) => { st.theirs = { local: String(m.local), remote: String(m.remote) }; st.check(); };
+      const timer = setTimeout(() => { if (!st.done) { st.done = true; onBad("it couldn't be verified in time"); } }, 15000);
+      call.on("close", () => { st.done = true; clearInterval(poll); clearTimeout(timer); });
+      return st;
+    }
+    return { b64, unb64, rand, derive, mac, same, session, ITER, fpOf, watchMedia };
   })();
 
-  const R = { peer: null, conn: null, sess: null, tel: null, vec: { x: 0, y: 0 }, drivingSince: 0, keys: new Set(), stickPointer: null, sendTimer: null };
+  const R = { peer: null, conn: null, sess: null, lastRx: 0, media: {}, pinger: null, tel: null, vec: { x: 0, y: 0 }, drivingSince: 0, keys: new Set(), stickPointer: null, sendTimer: null };
 
   function chip(id, text, state) { const el = $(id); el.textContent = text; el.className = "chip " + (state || ""); }
   function note(msg) { const n = $("note"); n.textContent = msg; n.hidden = false; clearTimeout(note.t); note.t = setTimeout(() => (n.hidden = true), 6000); }
@@ -375,6 +401,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     if (kept && kept.salt === d.salt && kept.iter === d.iter) key = kept.key;
     else {
       const pass = $("pass").value;
+      if (!pass && kept) { note("This phone's password has changed, or this isn't your phone. Type the password to log in again."); unlink(); $("pass").focus(); return; }
       if (!pass) { note("Enter the remote password you set on the phone."); unlink(); $("pass").focus(); return; }
       chip("st-link", "Checking password…", "warn");
       key = await SEC.derive(pass, SEC.unb64(d.salt), d.iter);
@@ -396,6 +423,13 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     chip("st-link", "Linked · " + P.code, "ok");
     $("btn-unpair").disabled = false; $("btn-pair").disabled = true; $("btn-stop").disabled = false;
     addLog("sys", "Logged in to the phone. The link is encrypted.");
+    R.lastRx = Date.now();
+    clearInterval(R.pinger);
+    R.pinger = setInterval(() => {
+      if (!R.sess) return clearInterval(R.pinger);
+      if (Date.now() - R.lastRx > 6000) { unlink("Lost contact with the phone."); return; }
+      send({ t: "ping" });
+    }, 1500);
   }
   function addLog(kind, line) {
     if (/← FED9|← FED8|→ FED0|→ FED1/.test(line) && !$("log-raw").checked) return; // routine packets flood the log
@@ -437,7 +471,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
       c.on("open", () => { chip("st-link", "Logging in…", "warn"); $("btn-unpair").disabled = false; });
       c.on("data", (d) => {
         if (R.conn !== c || !d || typeof d !== "object") return;
-        if (R.sess) { R.sess.open(d).then((m) => { try { onData(m); } catch (e) { console.error(e); } }).catch(() => { note("A message from the phone failed its security check. Disconnected."); unlink(); }); return; }
+        if (R.sess) { R.sess.open(d).then((m) => { R.lastRx = Date.now(); try { onData(m); } catch (e) { console.error(e); } }).catch(() => { note("A message from the phone failed its security check. Disconnected."); unlink(); }); return; }
         if (d.t === "busy") { note("Another computer is already controlling this LOOI."); unlink(); return; }
         if (d.t === "auth-locked") { note(`Too many wrong passwords. The phone accepts logins again at ${new Date(d.until).toLocaleTimeString()}.`); unlink(); return; }
         if (d.t === "auth-fail") { keyForget(code); note("Wrong password."); unlink(); $("pass").focus(); return; }
@@ -449,6 +483,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     R.peer.on("call", (call) => {
       if (!R.sess || call.peer !== "looi-" + code) { call.close(); return; } // video only from the phone we logged in to
       call.answer();
+      watchMedia(call);
       call.on("stream", (stream) => { $("video").srcObject = stream; $("video-empty").hidden = true; });
       call.on("close", () => {
         if (call.remoteStream && $("video").srcObject !== call.remoteStream) return; // a newer call already replaced this one
@@ -460,10 +495,22 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
       else { chip("st-link", "Link error", "bad"); note(`Link error: ${e.type || ""} ${e.message}`); }
     });
   }
+  // Media calls only count once both ends agree on their encryption keys (see SEC.watchMedia).
+  function watchMedia(call) {
+    R.media[call.connectionId] = SEC.watchMedia(call, send, (why) => {
+      note(`Closed a media call because ${why}. Someone may be interfering with the link.`);
+      addLog("err", `Media call closed: ${why}.`);
+      try { call.close(); } catch {}
+    });
+    call.on("close", () => { delete R.media[call.connectionId]; });
+  }
   function unlink(msg) {
     stopDriveSend(true);
-    try { R.conn?.close(); } catch {}
-    try { R.peer?.destroy(); } catch {}
+    clearInterval(R.pinger); R.pinger = null;
+    const c = R.conn, pr = R.peer, s = R.sess;
+    const teardown = () => { try { c?.close(); } catch {} try { pr?.destroy(); } catch {} };
+    if (s && c?.open) { s.seal({ t: "bye" }).then((m) => { try { c.send(m); } catch {} }).catch(() => {}).finally(() => setTimeout(teardown, 150)); } // tell the phone right away
+    else teardown();
     R.conn = null; R.peer = null; R.tel = null; R.sess = null; R.pending = null;
     $("video").srcObject = null; $("video-empty").hidden = false;
     $("btn-unpair").disabled = true; $("btn-pair").disabled = false; $("btn-stop").disabled = true;
@@ -474,6 +521,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   // ---- Incoming ----
   function onData(d) {
     if (!d || typeof d !== "object") return;
+    if (d.t === "media-fp") { R.media[d.id]?.theirsIn(d); return; }
     if (d.t === "hello") {
       if (d.settings?.["vis-rot"] != null) { VIEW.deg = Number(d.settings["vis-rot"]) || 0; VIEW.mirror = !!d.settings["vis-mirror"]; applyView(); }
       document.querySelectorAll("[data-set]").forEach((el) => {
@@ -809,6 +857,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     try {
       const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
       ptt = { mic, call: R.peer.call(R.conn.peer, mic) };
+      if (ptt.call) watchMedia(ptt.call);
       $("btn-ptt").classList.add("listening"); $("btn-ptt").textContent = "🎙 Talking…";
     } catch (err) { note("Your PC microphone is blocked: " + err.message); }
   }
@@ -821,6 +870,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   $("btn-ptt").addEventListener("pointerdown", pttStart);
   ["pointerup", "pointerleave", "pointercancel"].forEach((ev) => $("btn-ptt").addEventListener(ev, pttStop));
 
+  addEventListener("pagehide", () => { if (R.sess) unlink(); }); // say goodbye when the tab closes (the phone's 6 s watchdog covers crashes)
   if (q0) { if (keyLoad(q0.trim().toLowerCase())) link(); else $("pass").focus(); } // ?code= links straight away only when this PC remembers the key
 })();
 </script>

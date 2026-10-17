@@ -51,7 +51,9 @@ The repository and the pages are public, so the only secret is the password, and
 - **Encrypted link.** Every message after login is AES-256-GCM encrypted with a key unique to that link. Each message is numbered, so a tampered, replayed or reordered message closes the link.
 - **Lockout.** After 5 wrong passwords the phone refuses logins for 1 minute, doubling each further miss up to 1 hour. Setting the password again clears the lockout.
 - **One PC at a time.** A PC that hasn't logged in can't hold the slot; it's replaced by the next one, or dropped after 20 s.
-- **Video and audio** only start for the logged-in PC, and the PC only accepts video from the phone it logged in to. The streams themselves use WebRTC's built-in encryption, whose keys are exchanged through the PeerJS signal server. For full end-to-end trust of the video as well, run your own PeerServer (`?peerhost=…` on both pages).
+- **Video and audio** only start for the logged-in PC, and the PC only accepts video from the phone it logged in to. Each media call has its own WebRTC encryption keys, set up through the PeerJS signal server. Both ends then compare those keys' fingerprints over the password-protected link and hang up if they differ, so a relay that swaps in its own keys gets cut off.
+- **Disconnects.** The PC says goodbye when you press Disconnect or close the tab, and pings every 1.5 s. If the phone hears nothing for 6 s it frees the slot, so a crashed PC can't lock you out.
+- **Remembered key and a changed password.** If the phone's password changes, a PC with a remembered key won't log in on its own; you type the new password once.
 - The 6-letter code is only an address; it isn't the secret. Changing the password ends any current PC link.
 
 ## Protocol (service `0x00FF`)
