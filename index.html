@@ -39,6 +39,7 @@
   --tape: #111a20; --hi: #5a4a12; color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body {
   background: var(--bg); color: var(--fg); font: 15px/1.5 var(--f-body);
@@ -85,7 +86,7 @@ button.stop { background: var(--bad); color: #fff; border-color: var(--bad); }
 .knob { position: absolute; left: 50%; top: 50%; width: 30%; aspect-ratio: 1; border-radius: 50%; transform: translate(-50%, -50%); background: var(--panel); border: 2px solid var(--muted); box-shadow: 0 2px 8px rgba(0,0,0,.18); pointer-events: none; }
 .stick.active .knob { background: var(--accent); border-color: var(--accent); }
 #btn-stop { min-width: 140px; }
-.hint { color: var(--muted); font-size: .82rem; margin: 0; }
+.hint { color: var(--muted); font-size: .82rem; margin: 0; overflow-wrap: anywhere; }
 label { font-size: .85rem; color: var(--muted); display: grid; gap: 4px; }
 input[type="range"] { width: 100%; accent-color: var(--accent); }
 input.hex, select, input[type="number"] {
@@ -145,8 +146,20 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
 #face { position: fixed; inset: 0; z-index: 50; background: #000; touch-action: manipulation; }
 #face canvas { width: 100%; height: 100%; display: block; }
 #face-status { position: absolute; left: 0; right: 0; bottom: max(8px, env(safe-area-inset-bottom, 0px)); text-align: center; color: #5ff5e0; font: 500 .8rem var(--f-mono); opacity: .7; }
+.rem-code { margin: 0; font: 600 clamp(1.6rem, 9vw, 2.6rem)/1.1 var(--f-mono); letter-spacing: .18em; color: var(--accent); }
+/* Cover-screen layout: only what you need to hand control to the PC */
+@media (max-width: 360px) {
+  .wrap > section:not(#connect-panel):not(#remote-panel), .wrap > .grid, header .status .chip:not(#st-ble) { display: none; }
+  #connect-panel .row > :not(#btn-connect) { display: none; }
+  #btn-connect, #rem-start { flex: 1 1 100%; padding: 14px; font-size: 1.05rem; }
+  #remote-panel .row > button:not(#rem-start) { flex: 1 1 0; }
+  .panel { padding: 12px; }
+  #connect-panel .hint, #remote-panel .hint { font-size: .75rem; }
+  h1 { font-size: 1.1rem; } .sub { display: none; }
+}
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -170,7 +183,7 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
     <code>python3 -m http.server</code> and open <code>http://localhost:8000/looi-console.html</code>.
   </div>
 
-  <section class="panel">
+  <section class="panel" id="connect-panel">
     <div class="row">
       <button class="primary" id="btn-connect">Connect LOOI</button>
       <button id="btn-disconnect" disabled>Disconnect</button>
@@ -178,6 +191,20 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
       <label class="toggle"><input type="checkbox" id="opt-any"> Show all BLE devices</label>
     </div>
     <p class="hint">Close the official LOOI app first (swipe it away), otherwise it holds the connection. Power LOOI on, then Connect and pick "LOOI Robot".</p>
+  </section>
+
+  <section class="panel" id="remote-panel">
+    <div class="row" style="justify-content: space-between;">
+      <h2>Remote control from your PC</h2>
+      <span class="chip" id="st-remote">Remote off</span>
+    </div>
+    <p class="rem-code" id="rem-code" aria-label="Pairing code">——————</p>
+    <div class="row">
+      <button class="primary" id="rem-start">Allow remote control</button>
+      <button id="rem-stop" disabled>Turn off</button>
+      <button id="rem-new">New code</button>
+    </div>
+    <p class="hint">On your PC, open <b>lazybodybuilder.github.io/Looi/remote.html</b> and type this code. Video and controls go straight between the two devices; a free PeerJS server only introduces them. Opening this page with <code>?remote=1</code> at the end turns remote control on by itself, so on the cover screen you only need to tap <b>Connect LOOI</b>.</p>
   </section>
 
   <div class="grid">
@@ -331,6 +358,8 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
           <label>Bright above (0x02)<input type="number" id="ex-bright" value="40000" min="0" max="65535" step="1000"></label>
           <label>Run for up to (min)<input type="number" id="ex-mins" value="10" min="1" max="60" step="1"></label>
           <label class="toggle"><input type="checkbox" id="ex-lights" checked> Light on in the dark</label>
+          <label>Head tilt while exploring<input type="number" id="ex-tilt" value="150" min="0" max="255" step="5"></label>
+          <label class="toggle"><input type="checkbox" id="ex-peek" checked> Take a second look when camera and distance disagree</label>
         </div>
         <p class="hint">Calibrate first: press <b>Test 360° spin</b> and adjust "Time for one 360°" until LOOI ends facing where it started. The scan map depends on it. Keep this tab in front while exploring; the browser slows background tabs, so exploring stops if you switch away.</p>
       </div>
@@ -496,6 +525,7 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
     logEl.appendChild(span);
     while (logEl.childNodes.length > 1500) logEl.removeChild(logEl.firstChild);
     logEl.scrollTop = logEl.scrollHeight;
+    if (window.REM_FORWARD) window.REM_FORWARD({ t: "log", kind, line: `${t}  ${msg}` });
   }
   function chip(id, text, state) { const el = $(id); el.textContent = text; el.className = "chip " + (state || ""); }
   const short = (uuid) => uuid.slice(4, 8);
@@ -874,7 +904,7 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
   function safetyNote(msg) { $("ai-safety").textContent = "Safety: " + msg; log("sys", "Safety: " + msg); }
   function checkDrive(fwd) {
     if (!device?.gatt?.connected) return "robot not connected";
-    if (driving) return "a human is driving manually";
+    if (driving || REM.driveTimer) return "a human is driving manually";
     if (EX.running) return "explore mode is running";
     if (S.cliff && !S.cliff.every((x) => x === 1)) return "a cliff sensor does not see the surface";
     if (S.battery != null && S.battery < 8 && !S.charging) return "battery too low to drive";
@@ -963,6 +993,7 @@ You control a real robot on a real desk. Rules:
   }
 
   function addMsg(kind, text) {
+    if (window.REM_FORWARD) window.REM_FORWARD({ t: "chat", kind, text });
     const d = document.createElement("div");
     d.className = "msg " + kind;
     d.textContent = text;
@@ -1097,7 +1128,7 @@ You control a real robot on a real desk. Rules:
   const NB = 12; // 30° sectors
   const OPEN = 900; // mm treated as "open" (sensor reads FFFF beyond ~85 cm)
   // Remember explore settings between sessions
-  ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins"].forEach((id) => {
+  ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-tilt"].forEach((id) => {
     try { const v = localStorage.getItem("looi-" + id); if (v != null) $(id).value = v; } catch {}
     $(id).addEventListener("change", () => { try { localStorage.setItem("looi-" + id, $(id).value); } catch {} });
   });
@@ -1145,7 +1176,7 @@ You control a real robot on a real desk. Rules:
     }
     if (state === "cruise") EX.leg = { h0: EX.heading, t: Date.now() };
     EX.state = state; EX.t0 = Date.now(); EX.data = data;
-    $("ex-state").textContent = { cruise: EX.mode === "imitate" ? "Cruising your way" : "Cruising", maneuver: "Avoiding, your style", scan: "Scanning 360°", turnto: "Turning to open space", backup: "Backing away from edge", escape: "Turning away from edge", lifted: "Picked up — waiting", pause: "Pausing" }[state] || state;
+    $("ex-state").textContent = { cruise: EX.mode === "imitate" ? "Cruising your way" : "Cruising", maneuver: "Avoiding, your style", peek: "Taking a second look", scan: "Scanning 360°", turnto: "Turning to open space", backup: "Backing away from edge", escape: "Turning away from edge", lifted: "Picked up — waiting", pause: "Pausing" }[state] || state;
     if (state === "scan") { EX.samples = []; EX.data.dir = Math.random() < 0.5 ? 1 : -1; EX.data.h0 = EX.heading; EX.scans++; }
     $("ex-counts").textContent = `${EX.scans} · ${EX.edgeCount}`;
   }
@@ -1252,8 +1283,14 @@ You control a real robot on a real desk. Rules:
         let turn = EX.wander;
         if ($("vis-steer").checked && visFresh()) {
           const blk = visNum("vis-block", 30) / 100;
-          if (VIS.center < blk) {
+          if (VIS.center < blk && now > (EX.visIgnoreUntil || 0)) {
             EX.visBlockSince ||= now;
+            // Camera says blocked but the distance sensor sees room: tilt the head for a second look before reacting.
+            if (now - EX.visBlockSince > 200 && $("ex-peek").checked && effDist() > 350 && now > (EX.peekCooldown || 0)) {
+              await exSend(0, 0);
+              exEvent("camera unsure — taking a second look");
+              return exEnter("peek");
+            }
             if (now - EX.visBlockSince > 200) {
               EX.visBlockSince = 0;
               if (P) { exEvent("camera sees something ahead — avoiding your way"); return exEnter("maneuver", planManeuver(P)); }
@@ -1305,6 +1342,18 @@ You control a real robot on a real desk. Rules:
         }
         await exSend(0, 0);
         return finishScan();
+      }
+      case "peek": {
+        await exSend(0, 0);
+        const tilt = exNum("#ex-tilt", 150), t = since();
+        if (!EX.data.up) { EX.data.up = true; aiHead(String(Math.max(0, tilt - 60))).catch(() => {}); }
+        if (t < 700) return; // let the head settle and the vision catch a few frames
+        const clear = visFresh() && VIS.center >= visNum("vis-block", 30) / 100;
+        aiHead(String(tilt)).catch(() => {});
+        EX.peekCooldown = Date.now() + 4000;
+        if (clear && effDist() > 300) { EX.visIgnoreUntil = Date.now() + 2000; exEvent("second look: the way is clear — carrying on"); }
+        else { exEvent("second look confirms something ahead"); EX.visBlockSince = Date.now() - 1000; }
+        return exEnter("cruise");
       }
       case "maneuver": {
         if (!cliffAllOn()) { await exSend(0, 0); if (recordEdge() > 5) return stopExplore("keeps finding edges — the space is too small"); exEvent("edge while avoiding"); return exEnter("backup"); }
@@ -1363,6 +1412,8 @@ You control a real robot on a real desk. Rules:
     chip("st-explore", mode === "imitate" ? "Driving like you" : "Exploring", "ok");
     $("tr-run").disabled = true;
     exEvent(mode === "imitate" ? "started driving in your style" : "started");
+    EX.peekCooldown = 0; EX.visIgnoreUntil = 0;
+    aiHead(String(exNum("#ex-tilt", 150))).catch(() => {}); // camera rides on the head: set the viewing angle
     exEnter(effDist() < exNum("#ex-stopdist", 180) ? "scan" : "cruise");
     exLoop();
   }
@@ -1600,6 +1651,7 @@ You control a real robot on a real desk. Rules:
       log("sys", "Camera started: " + (VIS.stream.getVideoTracks()[0]?.label || "rear camera"));
       listCameras();
       visLoop();
+      remCallVideo();
     } catch (e) { chip("st-cam", "Camera blocked", "bad"); log("err", `Camera: ${e.name} — ${e.message}`); }
   }
   let camWasOn = false;
@@ -1760,9 +1812,172 @@ You control a real robot on a real desk. Rules:
       if (mood === "happy" && blink < 0.5) { g.fillStyle = "#000"; g.shadowBlur = 0; g.beginPath(); g.ellipse(cx, cy + h * 0.55, eW * 0.62, h * 0.45, 0, 0, Math.PI * 2); g.fill(); g.fillStyle = col; g.shadowBlur = eW * 0.25; }
     }
     g.shadowBlur = 0;
-    $("face-status").textContent = `${S.battery != null ? S.battery + "%" : ""}${S.charging ? " ⚡" : ""}${EX.running ? " · exploring" : ""}`;
+    $("face-status").textContent = `${S.battery != null ? S.battery + "%" : ""}${S.charging ? " ⚡" : ""}${EX.running ? " · exploring" : ""}${REM.peer && !REM.conn?.open ? " · remote code " + REM.code : REM.conn?.open ? " · PC linked" : ""}`;
     FACE.raf = requestAnimationFrame(drawFace);
   }
+
+  // ===================================================================
+  // ---- Remote host: lets a PC browser control this phone's LOOI ----
+  //   PeerJS (WebRTC) data channel for commands + telemetry, media call for the camera.
+  //   The phone stays in charge of safety: deadman on remote driving, forward block, cliff latch.
+  // ===================================================================
+  var REM = { peer: null, conn: null, call: null, code: null, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
+  const REMOTE_SETTINGS = ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-lights", "ex-tilt", "ex-peek",
+    "vis-block", "vis-tol", "vis-fov", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
+  function remCode(fresh) {
+    const alpha = "abcdefghjkmnpqrstuvwxyz23456789";
+    const make = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => alpha[b % alpha.length]).join("");
+    try {
+      let c = fresh ? null : localStorage.getItem("looi-remote-code");
+      if (!c) { c = make(); localStorage.setItem("looi-remote-code", c); }
+      return c;
+    } catch { return make(); }
+  }
+  function peerOptions() {
+    const q = new URLSearchParams(location.search);
+    if (!q.get("peerhost")) return { debug: 1 };
+    return { host: q.get("peerhost"), port: Number(q.get("peerport") || 443), path: q.get("peerpath") || "/", secure: q.get("peersecure") !== "0", debug: 1 };
+  }
+  function remStatus(text, state) { chip("st-remote", text, state); }
+  function remSend(msg) { try { if (REM.conn?.open) REM.conn.send(msg); } catch {} }
+  function remNote(msg) { remSend({ t: "note", msg }); }
+
+  function remoteStart(fresh = false) {
+    if (REM.peer && !fresh) return;
+    if (!window.Peer) { remStatus("Remote unavailable", "bad"); log("err", "Remote: the PeerJS library didn't load. Check the internet connection and reload."); return; }
+    remoteStop(true);
+    REM.code = remCode(fresh);
+    $("rem-code").textContent = REM.code;
+    remStatus("Starting…", "warn");
+    REM.peer = new Peer("looi-" + REM.code, peerOptions());
+    REM.peer.on("open", () => { remStatus("Waiting for PC", "warn"); log("sys", `Remote: ready. On your PC, open remote.html and enter code ${REM.code}`); });
+    REM.peer.on("connection", (c) => {
+      if (REM.conn?.open) { c.on("open", () => { c.send({ t: "busy" }); setTimeout(() => c.close(), 300); }); return; }
+      REM.conn = c;
+      c.on("open", () => {
+        remStatus("PC connected", "ok");
+        log("sys", "Remote: PC connected.");
+        remSend({ t: "hello", code: REM.code, settings: Object.fromEntries(REMOTE_SETTINGS.filter((id) => $(id)).map((id) => [id, $(id).type === "checkbox" ? $(id).checked : $(id).value])), cams: [...$("cam-select").options].map((o) => ({ id: o.value, label: o.textContent })), profile: TR.profile });
+        remCallVideo();
+        clearInterval(REM.telTimer); REM.telTimer = setInterval(remTelemetry, 250);
+      });
+      c.on("data", (d) => remHandle(d).catch((e) => log("err", "Remote command failed: " + e.message)));
+      c.on("close", () => remDropped("PC disconnected"));
+      c.on("error", (e) => log("err", "Remote link: " + (e.message || e.type)));
+    });
+    REM.peer.on("disconnected", () => { try { REM.peer.reconnect(); } catch {} });
+    REM.peer.on("error", (e) => {
+      if (e.type === "unavailable-id") { remStatus("Code in use", "bad"); log("err", "Remote: this code is already in use, probably by another open tab of the console. Close it, or press New code."); }
+      else { log("err", `Remote: ${e.type || ""} ${e.message}`); if (e.type === "network" || e.type === "server-error") remStatus("No signal server", "bad"); }
+    });
+    $("rem-start").disabled = true; $("rem-stop").disabled = false;
+  }
+  function remoteStop(quiet) {
+    remDropped(null);
+    try { REM.peer?.destroy(); } catch {}
+    REM.peer = null;
+    if (!quiet) { remStatus("Remote off"); log("sys", "Remote control turned off."); }
+    $("rem-start").disabled = false; $("rem-stop").disabled = true;
+  }
+  function remDropped(why) {
+    clearInterval(REM.telTimer); REM.telTimer = null;
+    remStopDrive(true);
+    try { REM.call?.close(); } catch {}
+    REM.call = null;
+    try { REM.conn?.close(); } catch {}
+    REM.conn = null;
+    if (why) { log("sys", "Remote: " + why + "."); if (REM.peer) remStatus("Waiting for PC", "warn"); }
+  }
+  function remCallVideo() {
+    if (!REM.peer || !REM.conn?.open) return;
+    try { REM.call?.close(); } catch {}
+    REM.call = null;
+    if (VIS.stream?.active) { REM.call = REM.peer.call(REM.conn.peer, VIS.stream); remSend({ t: "video", on: true }); }
+    else remSend({ t: "video", on: false });
+  }
+
+  function remTelemetry() {
+    if (!REM.conn?.open) return;
+    remSend({
+      t: "tel",
+      ble: !!device?.gatt?.connected, name: device?.name || null,
+      S: { dist: S.dist, eff: effDist(), prox: S.prox, cliff: S.cliff, docked: S.docked, charging: S.charging, battery: S.battery, head: S.head, light: S.light },
+      ex: { running: EX.running, mode: EX.mode, state: $("ex-state").textContent, event: $("ex-event").textContent, legs: EX.legs, scans: EX.scans, edges: EX.edgeCount },
+      vis: visFresh() ? { cols: VIS.cols, center: VIS.center, best: VIS.bestCol, fps: VIS.fps, block: visNum("vis-block", 30) / 100 } : null,
+      cam: VIS.running, face: FACE.on, ai: { busy: AI.busy, key: !!$("ai-key").value.trim(), auto: !!AI.autoTimer },
+      remoteDriving: !!REM.driveTimer, latch: REM.latch, echo: ECHO.mm,
+    });
+  }
+
+  // Remote driving: the PC streams {f,t}; the phone keeps sending at 50 ms and stops if the PC goes quiet for 300 ms.
+  function remDriveLoop() {
+    if (REM.driveTimer) return;
+    if (EX.running) stopExplore("PC took over driving");
+    if (driving) haltDrive(true);
+    REM.driveTimer = setInterval(() => {
+      let { f, t } = REM.vec;
+      if (Date.now() - REM.lastDrive > 300 || (f === 0 && t === 0)) { REM.latch = false; remStopDrive(true); return; }
+      if (!device?.gatt?.connected) { remStopDrive(false); return; }
+      if (REM.latch) return;
+      if (!cliffAllOn()) { REM.latch = true; write("fed0", fromHex(MOVE.stop), { response: false }).catch(() => {}); remNote("Edge detected — stopped. Let go of the joystick, then back away."); return; }
+      if (f > 0 && effDist() < 120) { f = 0; if (!REM.blockNoted) { REM.blockNoted = true; remNote("Obstacle right ahead — forward blocked, you can still turn or reverse."); } } else REM.blockNoted = false;
+      write("fed0", new Uint8Array([sb(f), sb(t)]), { response: false, quiet: true }).catch(() => {});
+    }, 50);
+  }
+  function remStopDrive(send) {
+    if (!REM.driveTimer) return;
+    clearInterval(REM.driveTimer); REM.driveTimer = null;
+    if (send && device?.gatt?.connected) write("fed0", fromHex(MOVE.stop), { response: false }).catch(() => {});
+  }
+
+  async function remHandle(d) {
+    if (!d || typeof d !== "object") return;
+    const clamp = (v) => Math.max(-127, Math.min(127, Math.round(Number(v) || 0)));
+    switch (d.t) {
+      // d.r = turn (d.t is the message type)
+      case "drive": REM.vec = { f: clamp(d.f), t: clamp(d.r) }; REM.lastDrive = Date.now(); if (REM.vec.f || REM.vec.t) remDriveLoop(); break;
+      case "stop":
+        REM.vec = { f: 0, t: 0 }; remStopDrive(true); AI.abort = true;
+        if (EX.running) await stopExplore("STOP from PC");
+        if (AI.autoTimer) stopAuto("STOP from PC");
+        haltDrive("force"); break;
+      case "head": if (device?.gatt?.connected) await aiHead(String(d.v)); break;
+      case "light": if (device?.gatt?.connected) await aiLight(!!d.on); break;
+      case "explore":
+        if (d.mode === "stop") await stopExplore("stopped from PC");
+        else { if (d.mode === "imitate" && !TR.profile) { remNote("No learned style yet — record and learn one first."); break; } remStopDrive(true); startExplore(d.mode === "imitate" ? "imitate" : "explore"); }
+        break;
+      case "cal": $("ex-cal").click(); break;
+      case "camera":
+        if (d.on) { if (d.deviceId != null) $("cam-select").value = d.deviceId; await startCamera(); }
+        else { stopCamera(); remCallVideo(); }
+        break;
+      case "face": d.on ? faceOn() : faceOff(); break;
+      case "reconnect": if (device) autoReconnect(); else remNote("Tap Connect LOOI on the phone once; after that the PC can reconnect it."); break;
+      case "handshake": await handshake(); break;
+      case "echo-reset": $("ex-echo-reset").click(); break;
+      case "setting": {
+        if (!REMOTE_SETTINGS.includes(d.id) || !$(d.id)) break;
+        const el = $(d.id);
+        if (el.type === "checkbox") el.checked = !!d.value; else el.value = d.value;
+        el.dispatchEvent(new Event("change"));
+        break;
+      }
+      case "ai":
+        if (typeof d.key === "string" && d.key.trim()) { $("ai-key").value = d.key.trim(); try { localStorage.setItem("looi-openai-key", d.key.trim()); $("ai-remember").checked = true; } catch {} remNote("API key saved on the phone."); }
+        if (typeof d.text === "string" && d.text.trim()) { if (!$("ai-key").value.trim()) remNote("Set your OpenAI key first."); else runAgent(d.text.trim()); }
+        if (typeof d.auto === "boolean" && d.auto !== !!AI.autoTimer) { $("ai-auto").checked = d.auto; $("ai-auto").dispatchEvent(new Event("change")); }
+        break;
+      case "video": remCallVideo(); break;
+    }
+  }
+
+  $("rem-start").addEventListener("click", () => remoteStart());
+  $("rem-stop").addEventListener("click", () => remoteStop());
+  $("rem-new").addEventListener("click", () => remoteStart(true));
+  if (new URLSearchParams(location.search).get("remote") === "1") setTimeout(() => remoteStart(), 300);
+
+  window.REM_FORWARD = (m) => { if (REM.conn?.open) { try { REM.conn.send(m); } catch {} } };
 
   // ---- UI plumbing ----
   function renderChars() {

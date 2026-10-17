@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LOOI Remote</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+/* Layout: mission-control — live camera on the left as the hero, telemetry and controls stacked on the right, log tape along the bottom. */
+:root {
+  --bg: #eef1f3; --panel: #ffffff; --line: #d5dce1; --fg: #17212b; --muted: #5d6b78;
+  --accent: #0b8f84; --accent-ink: #ffffff; --warn: #b26a00; --bad: #c0392b; --good: #1f8a4c; --tape: #f6f8f9;
+  --f-display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #0f151a; --panel: #172028; --line: #273340; --fg: #e3e9ee; --muted: #8b9aa8; --accent: #2fc4b4; --accent-ink: #062320; --warn: #f0a63a; --bad: #ff6b5b; --good: #4cd38a; --tape: #111a20; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #0f151a; --panel: #172028; --line: #273340; --fg: #e3e9ee; --muted: #8b9aa8; --accent: #2fc4b4; --accent-ink: #062320; --warn: #f0a63a; --bad: #ff6b5b; --good: #4cd38a; --tape: #111a20; color-scheme: dark; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--f-body); padding: 16px; padding-block: max(16px, env(safe-area-inset-top, 0px)) 24px; }
+.wrap { max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
+h1, h2 { font-family: var(--f-display); font-weight: 600; margin: 0; }
+h1 { font-size: 1.4rem; letter-spacing: .02em; }
+h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+.pair { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pair input { width: 9.5em; font: 600 1.1rem var(--f-mono); letter-spacing: .15em; text-transform: lowercase; }
+input, select, textarea { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--tape); color: var(--fg); font: .9rem var(--f-body); min-width: 0; }
+button { font: 600 .9rem var(--f-body); border-radius: 8px; border: 1px solid var(--line); background: var(--tape); color: var(--fg); padding: 9px 14px; cursor: pointer; touch-action: manipulation; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.stop { background: var(--bad); color: #fff; border-color: var(--bad); font-size: 1rem; padding: 12px 18px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); font: 500 .8rem var(--f-mono); color: var(--muted); }
+.chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.chip.ok { color: var(--fg); } .chip.ok::before { background: var(--good); } .chip.warn::before { background: var(--warn); } .chip.bad::before { background: var(--bad); }
+.status { display: flex; flex-wrap: wrap; gap: 8px; }
+.main { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); align-items: start; }
+@media (max-width: 980px) { .main { grid-template-columns: 1fr; } }
+.col { display: grid; gap: 16px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.hint { color: var(--muted); font-size: .82rem; margin: 0; }
+.video { position: relative; aspect-ratio: 4 / 3; background: #05090c; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+.video video, .video canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.video .empty { position: absolute; inset: 0; display: grid; place-items: center; color: #8b9aa8; font-size: .95rem; text-align: center; padding: 16px; }
+.hud { position: absolute; left: 10px; right: 10px; top: 10px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
+.hud span { background: rgba(5, 9, 12, .65); color: #e3e9ee; font: 500 .8rem var(--f-mono); padding: 3px 8px; border-radius: 6px; }
+.hud span.alert { background: rgba(192, 57, 43, .85); }
+.drive { display: grid; gap: 16px; grid-template-columns: auto minmax(0, 1fr); align-items: center; }
+@media (max-width: 560px) { .drive { grid-template-columns: 1fr; justify-items: center; } }
+.stick { position: relative; width: 200px; max-width: 100%; aspect-ratio: 1; border-radius: 50%; background: var(--tape); border: 1px solid var(--line); touch-action: none; user-select: none; cursor: grab; }
+.stick.active { border-color: var(--accent); }
+.stick::before, .stick::after { content: ""; position: absolute; background: var(--line); pointer-events: none; }
+.stick::before { left: 50%; top: 10%; bottom: 10%; width: 1px; } .stick::after { top: 50%; left: 10%; right: 10%; height: 1px; }
+.knob { position: absolute; left: 50%; top: 50%; width: 30%; aspect-ratio: 1; border-radius: 50%; transform: translate(-50%, -50%); background: var(--panel); border: 2px solid var(--muted); pointer-events: none; }
+.stick.active .knob { background: var(--accent); border-color: var(--accent); }
+.drive-side { display: grid; gap: 10px; min-width: 0; width: 100%; }
+label { font-size: .85rem; color: var(--muted); display: grid; gap: 4px; }
+input[type="range"] { width: 100%; accent-color: var(--accent); padding: 0; }
+.toggle { display: flex; align-items: center; gap: 6px; color: var(--fg); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: .9rem; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-family: var(--f-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.cliff { display: inline-flex; gap: 4px; } .cliff i { width: 14px; height: 14px; border-radius: 3px; background: var(--good); display: inline-block; } .cliff i.off { background: var(--bad); }
+.fields { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); align-items: end; }
+.chat { background: var(--tape); border: 1px solid var(--line); border-radius: 8px; padding: 10px; height: 200px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.msg { max-width: 88%; padding: 6px 10px; border-radius: 10px; font-size: .88rem; overflow-wrap: anywhere; }
+.msg.you { align-self: flex-end; background: var(--accent); color: var(--accent-ink); }
+.msg.looi { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+.msg.act, .msg.sys { align-self: flex-start; font: .75rem var(--f-mono); color: var(--muted); padding: 2px 4px; }
+.msg.err { align-self: center; color: var(--bad); font-size: .85rem; }
+.ai-input { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.log { background: var(--tape); border: 1px solid var(--line); border-radius: 8px; padding: 10px; height: 180px; overflow: auto; font: .78rem/1.5 var(--f-mono); white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.log .tx { color: var(--accent); } .log .err { color: var(--bad); } .log .sys { color: var(--muted); }
+.note { border: 1px solid var(--warn); background: var(--panel); border-radius: 10px; padding: 10px 14px; font-size: .9rem; }
+.keys { font: .78rem var(--f-mono); color: var(--muted); }
+details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>LOOI Remote</h1>
+      <p class="hint">Drive and watch the LOOI on your phone from this computer.</p>
+    </div>
+    <form class="pair" id="pair">
+      <input id="code" placeholder="code" autocomplete="off" spellcheck="false" aria-label="Pairing code from the phone" maxlength="6">
+      <button class="primary" id="btn-pair" type="submit">Connect</button>
+      <button id="btn-unpair" type="button" disabled>Disconnect</button>
+    </form>
+    <div class="status">
+      <span class="chip" id="st-link">Not linked</span>
+      <span class="chip" id="st-ble">Robot —</span>
+      <span class="chip" id="st-batt">Battery —</span>
+    </div>
+  </header>
+
+  <div class="note" id="note" hidden></div>
+
+  <div class="main">
+    <div class="col">
+      <div class="video">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="empty" id="video-empty">Enter the code shown on the phone to link up. The camera feed appears here once the phone's camera is on.</div>
+        <div class="hud" id="hud"></div>
+      </div>
+      <section class="panel">
+        <div class="row" style="justify-content: space-between;">
+          <h2>Drive</h2>
+          <button class="stop" id="btn-stop" disabled>STOP</button>
+        </div>
+        <div class="drive">
+          <div class="stick" id="stick" aria-label="Drive joystick"><span class="knob" id="knob"></span></div>
+          <div class="drive-side">
+            <label>Speed limit <span id="speed-val">60</span><input type="range" id="speed" min="15" max="127" value="60"></label>
+            <label>Head <span id="head-val">135</span><input type="range" id="head" min="0" max="255" value="135"></label>
+            <div class="row">
+              <button data-head="0">Look up</button><button data-head="135">Centre</button><button data-head="255">Look down</button>
+              <button id="btn-light">Light</button>
+            </div>
+            <p class="keys">Keys: W A S D or arrows to drive (combine for curves) · Q / Z head up / down · Space STOP · E explore</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="panel">
+        <h2>Robot</h2>
+        <dl class="kv">
+          <dt>Distance ahead</dt><dd id="t-dist">—</dd>
+          <dt>Camera floor</dt><dd id="t-vis">—</dd>
+          <dt>Edges</dt><dd id="t-cliff">—</dd>
+          <dt>Phone · charger</dt><dd id="t-dock">—</dd>
+          <dt>Light level</dt><dd id="t-prox">—</dd>
+          <dt>Mode</dt><dd id="t-state">—</dd>
+          <dt>Last event</dt><dd id="t-event">—</dd>
+        </dl>
+        <div class="row">
+          <button class="primary" id="btn-explore">Explore</button>
+          <button id="btn-imitate">Drive like me</button>
+          <button id="btn-reconnect">Reconnect robot</button>
+        </div>
+        <div class="row">
+          <button id="btn-cam">Camera on</button>
+          <select id="cam-select" aria-label="Phone camera"><option value="">Rear camera (default)</option></select>
+          <button id="btn-face">Face on</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Talk to LOOI · AI pilot</h2>
+        <div class="chat" id="chat"><div class="msg sys">The AI runs on the phone and sees through its camera. Set your OpenAI key once below if the phone doesn't have it yet.</div></div>
+        <form class="ai-input" id="ai-form">
+          <input id="ai-text" placeholder="e.g. look around and tell me what's on my desk" autocomplete="off">
+          <button class="primary" type="submit">Send</button>
+        </form>
+        <div class="row">
+          <label class="toggle"><input type="checkbox" id="ai-auto"> Autonomous mode</label>
+          <details style="flex: 1;">
+            <summary>OpenAI key</summary>
+            <div class="row" style="margin-top: 8px;">
+              <input id="ai-key" type="password" placeholder="sk-…" autocomplete="off" style="flex: 1;">
+              <button id="btn-key" type="button">Send to phone</button>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="panel">
+        <details>
+          <summary>Explore &amp; vision settings</summary>
+          <div class="fields" style="margin-top: 10px;">
+            <label>Cruise speed<input type="number" data-set="ex-cruise" min="15" max="100" step="5"></label>
+            <label>Turn speed<input type="number" data-set="ex-turn" min="20" max="100" step="5"></label>
+            <label>Obstacle stop (mm)<input type="number" data-set="ex-stopdist" min="80" max="500" step="10"></label>
+            <label>360° time (ms)<input type="number" data-set="ex-spin" min="800" max="10000" step="100"></label>
+            <label>Head tilt exploring<input type="number" data-set="ex-tilt" min="0" max="255" step="5"></label>
+            <label>Blocked below (%)<input type="number" data-set="vis-block" min="5" max="80" step="5"></label>
+            <label>Floor tolerance<input type="number" data-set="vis-tol" min="0.02" max="0.3" step="0.01"></label>
+            <label>Camera FOV (°)<input type="number" data-set="vis-fov" min="40" max="130" step="5"></label>
+          </div>
+          <div class="row" style="margin-top: 10px;">
+            <label class="toggle"><input type="checkbox" data-set="vis-steer"> Steer with camera</label>
+            <label class="toggle"><input type="checkbox" data-set="ex-peek"> Second look</label>
+            <label class="toggle"><input type="checkbox" data-set="ex-lights"> Light in the dark</label>
+            <label class="toggle"><input type="checkbox" data-set="vis-ai"> AI can see</label>
+          </div>
+          <div class="row" style="margin-top: 10px;">
+            <button id="btn-cal" type="button">Test 360° spin</button>
+            <button id="btn-echo" type="button">Reset self-echo filter</button>
+          </div>
+        </details>
+      </section>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Phone log</h2>
+    <pre class="log" id="log"></pre>
+  </section>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const R = { peer: null, conn: null, tel: null, vec: { x: 0, y: 0 }, drivingSince: 0, keys: new Set(), stickPointer: null, sendTimer: null };
+
+  function chip(id, text, state) { const el = $(id); el.textContent = text; el.className = "chip " + (state || ""); }
+  function note(msg) { const n = $("note"); n.textContent = msg; n.hidden = false; clearTimeout(note.t); note.t = setTimeout(() => (n.hidden = true), 6000); }
+  function send(m) { try { if (R.conn?.open) R.conn.send(m); } catch {} }
+  function addLog(kind, line) {
+    const span = document.createElement("span"); span.className = kind; span.textContent = line + "\n";
+    const el = $("log"); el.appendChild(span);
+    while (el.childNodes.length > 600) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+  }
+  function addChat(kind, text) {
+    const d = document.createElement("div"); d.className = "msg " + kind; d.textContent = text;
+    $("chat").appendChild(d); $("chat").scrollTop = $("chat").scrollHeight;
+  }
+  function peerOptions() {
+    const q = new URLSearchParams(location.search);
+    if (!q.get("peerhost")) return { debug: 1 };
+    return { host: q.get("peerhost"), port: Number(q.get("peerport") || 443), path: q.get("peerpath") || "/", secure: q.get("peersecure") !== "0", debug: 1 };
+  }
+
+  // ---- Pairing ----
+  try { const c = localStorage.getItem("looi-remote-last"); if (c) $("code").value = c; } catch {}
+  const q0 = new URLSearchParams(location.search).get("code"); if (q0) $("code").value = q0;
+  $("pair").addEventListener("submit", (e) => { e.preventDefault(); link(); });
+  $("btn-unpair").addEventListener("click", () => unlink("Disconnected."));
+
+  function link() {
+    const code = $("code").value.trim().toLowerCase();
+    if (!/^[a-z0-9]{6}$/.test(code)) { note("The code is the 6 letters and digits shown on the phone."); return; }
+    if (!window.Peer) { note("The PeerJS library didn't load. Check your internet connection and reload."); return; }
+    try { localStorage.setItem("looi-remote-last", code); } catch {}
+    unlink();
+    chip("st-link", "Linking…", "warn");
+    R.peer = new Peer(undefined, peerOptions());
+    R.peer.on("open", () => {
+      R.conn = R.peer.connect("looi-" + code, { reliable: true });
+      R.conn.on("open", () => {
+        chip("st-link", "Linked · " + code, "ok");
+        $("btn-unpair").disabled = false; $("btn-pair").disabled = true; $("btn-stop").disabled = false;
+        addLog("sys", "Linked to the phone.");
+      });
+      R.conn.on("data", onData);
+      R.conn.on("close", () => unlink("The phone closed the link."));
+    });
+    R.peer.on("call", (call) => {
+      call.answer();
+      call.on("stream", (stream) => { $("video").srcObject = stream; $("video-empty").hidden = true; });
+      call.on("close", () => {
+        if (call.remoteStream && $("video").srcObject !== call.remoteStream) return; // a newer call already replaced this one
+        $("video").srcObject = null; $("video-empty").hidden = false; $("video-empty").textContent = "Camera is off on the phone. Press Camera on.";
+      });
+    });
+    R.peer.on("error", (e) => {
+      if (e.type === "peer-unavailable") { chip("st-link", "Phone not found", "bad"); note("No phone with that code is online. On the phone, press Allow remote control and check the code."); }
+      else { chip("st-link", "Link error", "bad"); note(`Link error: ${e.type || ""} ${e.message}`); }
+    });
+  }
+  function unlink(msg) {
+    stopDriveSend(true);
+    try { R.conn?.close(); } catch {}
+    try { R.peer?.destroy(); } catch {}
+    R.conn = null; R.peer = null; R.tel = null;
+    $("video").srcObject = null; $("video-empty").hidden = false;
+    $("btn-unpair").disabled = true; $("btn-pair").disabled = false; $("btn-stop").disabled = true;
+    chip("st-link", "Not linked"); chip("st-ble", "Robot —"); chip("st-batt", "Battery —");
+    if (msg) addLog("sys", msg);
+  }
+
+  // ---- Incoming ----
+  function onData(d) {
+    if (!d || typeof d !== "object") return;
+    if (d.t === "busy") { note("Another computer is already controlling this LOOI."); unlink(); return; }
+    if (d.t === "hello") {
+      document.querySelectorAll("[data-set]").forEach((el) => {
+        const v = d.settings?.[el.dataset.set];
+        if (v == null) return;
+        if (el.type === "checkbox") el.checked = !!v; else el.value = v;
+      });
+      const sel = $("cam-select");
+      sel.innerHTML = (d.cams || []).map((c) => `<option value="${c.id}">${c.label}</option>`).join("") || '<option value="">Rear camera (default)</option>';
+      $("btn-imitate").disabled = !d.profile;
+      return;
+    }
+    if (d.t === "tel") return showTel(d);
+    if (d.t === "log") return addLog(d.kind, d.line);
+    if (d.t === "chat") return addChat(d.kind, d.text);
+    if (d.t === "note") { note(d.msg); addLog("err", "Phone: " + d.msg); return; }
+    if (d.t === "video" && !d.on) { $("video").srcObject = null; $("video-empty").hidden = false; $("video-empty").textContent = "Camera is off on the phone. Press Camera on."; }
+  }
+
+  function showTel(d) {
+    R.tel = d;
+    const S = d.S || {};
+    chip("st-ble", d.ble ? `Robot · ${d.name || "LOOI"}` : "Robot disconnected", d.ble ? "ok" : "bad");
+    if (S.battery != null) chip("st-batt", `Battery ${S.battery}%${S.charging ? " ⚡" : ""}`, S.battery > 20 ? "ok" : "warn");
+    const dist = S.dist == null ? "—" : S.dist === 0xffff ? "clear (over 85 cm)" : `${S.dist} mm${S.eff >= 900 && S.dist !== 0xffff ? " (filtered)" : ""}`;
+    $("t-dist").textContent = dist;
+    $("t-vis").textContent = d.vis ? `${Math.round(d.vis.center * 100)}% free ahead · ${d.vis.fps} fps` : d.cam ? "warming up" : "camera off";
+    $("t-cliff").innerHTML = S.cliff ? `<span class="cliff">${S.cliff.map((x) => `<i class="${x ? "" : "off"}" title="${x ? "surface" : "edge"}"></i>`).join("")}</span> ${S.cliff.every((x) => x) ? "on surface" : S.cliff.every((x) => !x) ? "lifted" : "EDGE"}` : "—";
+    $("t-dock").textContent = `${S.docked == null ? "?" : S.docked ? "docked" : "not docked"} · ${S.charging ? "charging" : "on battery"}`;
+    $("t-prox").textContent = S.prox == null ? "—" : String(S.prox);
+    $("t-state").textContent = d.remoteDriving ? "You're driving" : d.ex?.running ? `${d.ex.mode === "imitate" ? "Drive like me" : "Explore"} · ${d.ex.state}` : d.ai?.busy ? "AI is acting" : "Idle";
+    $("t-event").textContent = d.ex?.event || "—";
+    $("btn-explore").textContent = d.ex?.running ? "Stop exploring" : "Explore";
+    $("btn-explore").classList.toggle("on", !!d.ex?.running);
+    $("btn-cam").textContent = d.cam ? "Camera off" : "Camera on";
+    $("btn-face").textContent = d.face ? "Face off" : "Face on";
+    $("btn-light").classList.toggle("on", !!S.light);
+    $("ai-auto").checked = !!d.ai?.auto;
+    if (document.activeElement !== $("head") && S.head != null) { $("head").value = S.head; $("head-val").textContent = S.head; }
+    // HUD over the video
+    const hud = [];
+    if (S.dist != null) hud.push([`⟷ ${S.dist === 0xffff ? "clear" : S.dist + " mm"}`, S.dist !== 0xffff && S.dist < 180]);
+    if (S.cliff && !S.cliff.every((x) => x)) hud.push(["EDGE", true]);
+    if (d.latch) hud.push(["stopped at edge — let go", true]);
+    if (d.ex?.running) hud.push([d.ex.state, false]);
+    $("hud").innerHTML = hud.map(([t, a]) => `<span class="${a ? "alert" : ""}">${t}</span>`).join("");
+    drawOverlay(d.vis);
+  }
+  function drawOverlay(v) {
+    const c = $("overlay"), g = c.getContext("2d");
+    c.width = c.clientWidth; c.height = c.clientHeight;
+    g.clearRect(0, 0, c.width, c.height);
+    if (!v || !v.cols || !$("video").srcObject) return;
+    const cw = c.width / v.cols.length;
+    v.cols.forEach((f, i) => {
+      g.globalAlpha = 0.3; g.fillStyle = f < v.block ? "#ff6b5b" : "#4cd38a";
+      g.fillRect(i * cw + 1, c.height * (1 - f), cw - 2, c.height * f);
+    });
+    g.globalAlpha = 1; g.strokeStyle = "#fff"; g.lineWidth = 2;
+    g.strokeRect(v.best * cw + 1, 1, cw - 2, c.height - 2);
+  }
+
+  // ---- Driving: stream the joystick vector every 80 ms while active; the phone stops if this goes quiet ----
+  const stick = $("stick"), knob = $("knob");
+  function vecToCmd() {
+    const sp = Number($("speed").value) || 60;
+    return { f: Math.round(R.vec.y * sp), r: Math.round(-R.vec.x * sp) };
+  }
+  function startDriveSend() {
+    if (R.sendTimer) return;
+    const tick = () => { const c = vecToCmd(); send({ t: "drive", f: c.f, r: c.r }); };
+    tick();
+    R.sendTimer = setInterval(tick, 80);
+  }
+  function stopDriveSend(sendStop) {
+    clearInterval(R.sendTimer); R.sendTimer = null;
+    R.vec = { x: 0, y: 0 }; knob.style.transform = "translate(-50%, -50%)"; stick.classList.remove("active");
+    if (sendStop) send({ t: "drive", f: 0, r: 0 });
+  }
+  function setFromPointer(e) {
+    const r = stick.getBoundingClientRect(), radius = r.width / 2 - knob.offsetWidth / 2;
+    let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    const dd = Math.hypot(dx, dy); if (dd > radius) { dx *= radius / dd; dy *= radius / dd; }
+    knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    R.vec = { x: dx / radius, y: -dy / radius };
+  }
+  stick.addEventListener("pointerdown", (e) => { if (!R.conn?.open) return; e.preventDefault(); R.stickPointer = e.pointerId; stick.setPointerCapture?.(e.pointerId); stick.classList.add("active"); setFromPointer(e); startDriveSend(); });
+  stick.addEventListener("pointermove", (e) => { if (e.pointerId === R.stickPointer) setFromPointer(e); });
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach((ev) => stick.addEventListener(ev, (e) => { if (e.pointerId === R.stickPointer) { R.stickPointer = null; stopDriveSend(true); } }));
+
+  const KEYS = { arrowup: "f", w: "f", arrowdown: "b", s: "b", arrowleft: "l", a: "l", arrowright: "r", d: "r" };
+  function keyVec() {
+    const y = (R.keys.has("f") ? 1 : 0) - (R.keys.has("b") ? 1 : 0), x = (R.keys.has("r") ? 1 : 0) - (R.keys.has("l") ? 1 : 0);
+    const m = Math.hypot(x, y) || 1;
+    R.vec = { x: x / m, y: y / m };
+    knob.style.transform = `translate(calc(-50% + ${R.vec.x * 110}%), calc(-50% + ${-R.vec.y * 110}%))`;
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.target.matches("input, textarea, select") || !R.conn?.open) return;
+    const k = e.key.toLowerCase();
+    if (k === " ") { e.preventDefault(); stopAll(); return; }
+    if (k === "e" && !e.repeat) { toggleExplore("explore"); return; }
+    if ((k === "q" || k === "z") && !e.repeat) { const v = Math.max(0, Math.min(255, Number($("head").value) + (k === "q" ? -30 : 30))); setHead(v); return; }
+    const dir = KEYS[k]; if (!dir) return;
+    e.preventDefault(); if (e.repeat) return;
+    R.keys.add(dir); keyVec(); stick.classList.add("active"); startDriveSend();
+  });
+  document.addEventListener("keyup", (e) => {
+    const dir = KEYS[e.key.toLowerCase()]; if (!dir) return;
+    R.keys.delete(dir);
+    if (!R.keys.size && R.stickPointer == null) stopDriveSend(true); else keyVec();
+  });
+  window.addEventListener("blur", () => { R.keys.clear(); if (R.sendTimer) stopDriveSend(true); });
+
+  // ---- Buttons ----
+  function stopAll() { R.keys.clear(); stopDriveSend(false); send({ t: "stop" }); }
+  function toggleExplore(mode) { send({ t: "explore", mode: R.tel?.ex?.running ? "stop" : mode }); }
+  function setHead(v) { $("head").value = v; $("head-val").textContent = v; send({ t: "head", v }); }
+  $("btn-stop").addEventListener("click", stopAll);
+  $("btn-explore").addEventListener("click", () => toggleExplore("explore"));
+  $("btn-imitate").addEventListener("click", () => toggleExplore("imitate"));
+  $("btn-reconnect").addEventListener("click", () => send({ t: "reconnect" }));
+  $("btn-cam").addEventListener("click", () => send({ t: "camera", on: !R.tel?.cam, deviceId: $("cam-select").value || null }));
+  $("cam-select").addEventListener("change", () => { if (R.tel?.cam) send({ t: "camera", on: true, deviceId: $("cam-select").value || null }); });
+  $("btn-face").addEventListener("click", () => send({ t: "face", on: !R.tel?.face }));
+  $("btn-light").addEventListener("click", () => send({ t: "light", on: !R.tel?.S?.light }));
+  $("btn-cal").addEventListener("click", () => send({ t: "cal" }));
+  $("btn-echo").addEventListener("click", () => send({ t: "echo-reset" }));
+  document.querySelectorAll("[data-head]").forEach((b) => b.addEventListener("click", () => setHead(Number(b.dataset.head))));
+  let headTimer = null;
+  $("head").addEventListener("input", (e) => { $("head-val").textContent = e.target.value; clearTimeout(headTimer); headTimer = setTimeout(() => send({ t: "head", v: Number(e.target.value) }), 80); });
+  $("speed").addEventListener("input", (e) => { $("speed-val").textContent = e.target.value; });
+  document.querySelectorAll("[data-set]").forEach((el) => el.addEventListener("change", () => send({ t: "setting", id: el.dataset.set, value: el.type === "checkbox" ? el.checked : el.value })));
+  $("ai-form").addEventListener("submit", (e) => { e.preventDefault(); const t = $("ai-text").value.trim(); if (!t) return; $("ai-text").value = ""; send({ t: "ai", text: t }); });
+  $("btn-key").addEventListener("click", () => { const k = $("ai-key").value.trim(); if (!k) return; send({ t: "ai", key: k }); $("ai-key").value = ""; });
+  $("ai-auto").addEventListener("change", (e) => send({ t: "ai", auto: e.target.checked }));
+  window.addEventListener("resize", () => drawOverlay(R.tel?.vis));
+  if (q0) link();
+})();
+</script>
+</body>
+</html>
