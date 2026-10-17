@@ -288,7 +288,8 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
           <label class="toggle"><input type="checkbox" id="vis-ai" checked> Let the AI pilot see</label>
         </div>
         <p class="hint">How it works: LOOI learns what the floor looks like from the patch right in front of it, then checks each of 9 columns for how far up the image the floor reaches. Tall green bars mean open space, short red bars mean something is in the way (an obstacle, or the desk edge). The distance and cliff sensors still have the final say. Use the ultra-wide rear camera if it's listed, and set the field of view to about 110°.</p>
-        <p class="hint"><b>Face mode</b> fills the screen with LOOI's eyes, sized for the cover screen. The eyes look where LOOI is heading, react to obstacles, and blink. Double-tap to exit.</p>
+        <p class="hint"><b>Face mode</b> fills the screen with LOOI's eyes, sized for the cover screen. The eyes look where LOOI is heading, react to obstacles, and blink. On the face: <b>press and hold</b> to start or stop exploring, <b>double-tap</b> to exit. If the page is hidden while folding, the camera and Bluetooth reconnect on their own when it's visible again.</p>
+        <label class="toggle"><input type="checkbox" id="face-mode-style"> Press-and-hold starts "Drive like me" instead of Explore</label>
       </div>
       <div class="cam-view">
         <div class="cam-wrap">
@@ -521,8 +522,20 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
         : { filters: [{ name: "LOOI Robot" }, { namePrefix: "LOOI" }], optionalServices: EXTRA_SERVICES };
       device = await navigator.bluetooth.requestDevice(opts);
       device.addEventListener("gattserverdisconnected", onDisconnected);
-      chip("st-ble", "Connecting…", "warn");
       log("sys", `Selected ${device.name || "unnamed device"}`);
+      await openGatt();
+    } catch (e) {
+      if (e.name === "NotFoundError") {
+        log("err", `No device connected: ${e.message}`);
+        log("sys", "If the picker was empty: LOOI is probably still connected to the phone app (connected robots stop advertising), or your laptop's Bluetooth is off. Try 'Show all BLE devices'.");
+        chip("st-ble", "No device", "bad");
+      }
+      else { log("err", `Connect failed: ${e.message}`); chip("st-ble", "Connect failed", "bad"); }
+    }
+  }
+  // GATT setup + handshake. Reused for automatic reconnects (no picker needed for a device already chosen).
+  async function openGatt() {
+      chip("st-ble", "Connecting…", "warn");
       const server = await device.gatt.connect();
       const service = await server.getPrimaryService(SERVICE);
       const list = await service.getCharacteristics();
@@ -536,14 +549,6 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
       await handshake();
       chip("st-ble", `Connected · ${device.name || "LOOI"}`, "ok");
       setEnabled(true);
-    } catch (e) {
-      if (e.name === "NotFoundError") {
-        log("err", `No device connected: ${e.message}`);
-        log("sys", "If the picker was empty: LOOI is probably still connected to the phone app (connected robots stop advertising), or your laptop's Bluetooth is off. Try 'Show all BLE devices'.");
-        chip("st-ble", "No device", "bad");
-      }
-      else { log("err", `Connect failed: ${e.message}`); chip("st-ble", "Connect failed", "bad"); }
-    }
   }
 
   async function subscribeAll() {
@@ -580,6 +585,19 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
     chip("st-ble", "Disconnected", "bad");
     chip("st-hs", "Handshake —");
     log("err", "LOOI disconnected. If it happens a few seconds after connecting, the handshake didn't take — try Replay handshake right after Connect.");
+    if (!manualDisconnect) setTimeout(autoReconnect, 1500);
+    manualDisconnect = false;
+  }
+  let manualDisconnect = false, reconnecting = false;
+  async function autoReconnect(tries = 3) {
+    if (reconnecting || !device || device.gatt.connected || document.hidden) return;
+    reconnecting = true;
+    for (let i = 1; i <= tries && !device.gatt.connected; i++) {
+      log("sys", `Reconnecting to ${device.name || "LOOI"} (attempt ${i}/${tries})…`);
+      try { chars.clear(); await openGatt(); log("sys", "Reconnected."); break; }
+      catch (e) { log("err", `Reconnect failed: ${e.message}`); await sleep(2000); }
+    }
+    reconnecting = false;
   }
 
   // ---- Notifications ----
@@ -1584,6 +1602,13 @@ You control a real robot on a real desk. Rules:
       visLoop();
     } catch (e) { chip("st-cam", "Camera blocked", "bad"); log("err", `Camera: ${e.name} — ${e.message}`); }
   }
+  let camWasOn = false;
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { camWasOn = VIS.running; return; }
+    if (camWasOn && (!VIS.running || !VIS.stream?.active)) { log("sys", "Page visible again — restarting camera."); startCamera(); }
+    if (device && !device.gatt.connected) autoReconnect();
+    if (FACE.on) { try { navigator.wakeLock?.request("screen").then((w) => (FACE.wake = w)); } catch {} }
+  });
   function stopCamera(quiet) {
     VIS.running = false;
     VIS.stream?.getTracks().forEach((t) => t.stop()); VIS.stream = null;
@@ -1685,7 +1710,21 @@ You control a real robot on a real desk. Rules:
     try { FACE.wake?.release(); } catch {}
   }
   $("face-btn").addEventListener("click", faceOn);
-  $("face").addEventListener("pointerup", () => { const t = Date.now(); if (t - FACE.lastTap < 350) faceOff(); FACE.lastTap = t; });
+  let pressTimer = null;
+  $("face").addEventListener("pointerdown", () => {
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      if (EX.running) stopExplore("stopped from the face screen");
+      else if (device?.gatt?.connected) startExplore(TR.profile && $("face-mode-style").checked ? "imitate" : "explore");
+      navigator.vibrate?.(60);
+    }, 700);
+  });
+  $("face").addEventListener("pointerup", () => {
+    if (!pressTimer) return; // long press already handled
+    clearTimeout(pressTimer); pressTimer = null;
+    const t = Date.now(); if (t - FACE.lastTap < 350) faceOff(); FACE.lastTap = t;
+  });
+  $("face").addEventListener("pointercancel", () => { clearTimeout(pressTimer); pressTimer = null; });
   function faceMood() {
     if (S.cliff && !S.cliff.every((x) => x === 1)) return "scared";
     if (effDist() < 200 || (visFresh() && VIS.center < visNum("vis-block", 30) / 100)) return "surprised";
@@ -1754,7 +1793,7 @@ You control a real robot on a real desk. Rules:
     if (!on && EX.running) stopExplore("robot disconnected");
   }
   $("btn-connect").addEventListener("click", connect);
-  $("btn-disconnect").addEventListener("click", () => { stopDrive("force"); setTimeout(() => device?.gatt?.disconnect(), 150); });
+  $("btn-disconnect").addEventListener("click", () => { manualDisconnect = true; stopDrive("force"); setTimeout(() => device?.gatt?.disconnect(), 150); });
   $("btn-handshake").addEventListener("click", handshake);
   $("btn-clear").addEventListener("click", () => { logEl.textContent = ""; });
   $("btn-copy").addEventListener("click", async () => {

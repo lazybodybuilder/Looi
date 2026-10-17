@@ -16,10 +16,13 @@ A single-page controller for the TangibleFuture LOOI desk robot. It talks straig
 
 ## Run on the phone (Galaxy Z Flip 4 on LOOI)
 1. Force-stop the official LOOI app so it releases Bluetooth.
-2. Open the link above in **Chrome**. Bluetooth needs Chrome or Edge; the camera needs https.
-3. Connect LOOI → Start camera (pick the ultra-wide if listed) → Face mode.
-4. Fold the phone and mount it cover-screen forward. The rear cameras look ahead.
-   To keep Chrome on the cover screen, use the free *CoverScreen OS* app.
+2. Open the link above in **Chrome** with the phone unfolded. Bluetooth needs Chrome or Edge; the camera needs https.
+3. **Connect LOOI**, then **Start camera** and pick the rear camera (try each "facing back" entry; the ultra-wide shows the most). Set the field of view to match (~70° wide, ~110° ultra-wide).
+4. Get Chrome onto the cover screen: Good Lock → MultiStar → *I ♡ Galaxy Foldable* → Launcher widget (if your One UI offers it), or the free *CoverScreen OS* app.
+5. Press **Face mode**, fold, and mount the phone with the cover screen and rear cameras facing forward.
+6. On the face: **press and hold** to start/stop exploring, **double-tap** to exit. If folding hides the page for a moment, the camera and Bluetooth reconnect automatically.
+
+Tip: LOOI charges the phone wirelessly, so *Developer options → Stay awake* keeps the screen on while it's docked.
 
 ## Protocol (service `0x00FF`)
 | What | Where | Format |
