@@ -51,7 +51,10 @@ button.stop { background: var(--bad); color: #fff; border-color: var(--bad); fon
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .hint { color: var(--muted); font-size: .82rem; margin: 0; }
 .video { position: relative; aspect-ratio: 4 / 3; background: #05090c; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
-.video video, .video canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.video .rot { position: absolute; left: 50%; top: 50%; width: 100%; height: 100%; transform: translate(-50%, -50%); }
+.video .rot video, .video .rot canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.view-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.safety-off { color: var(--bad); font-weight: 600; }
 .video .empty { position: absolute; inset: 0; display: grid; place-items: center; color: #8b9aa8; font-size: .95rem; text-align: center; padding: 16px; }
 .hud { position: absolute; left: 10px; right: 10px; top: 10px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
 .hud span { background: rgba(5, 9, 12, .65); color: #e3e9ee; font: 500 .8rem var(--f-mono); padding: 3px 8px; border-radius: 6px; }
@@ -111,10 +114,21 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   <div class="main">
     <div class="col">
       <div class="video">
-        <video id="video" autoplay playsinline muted></video>
-        <canvas id="overlay"></canvas>
+        <div class="rot" id="rot">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="overlay"></canvas>
+        </div>
         <div class="empty" id="video-empty">Enter the code shown on the phone to link up. The camera feed appears here once the phone's camera is on.</div>
         <div class="hud" id="hud"></div>
+      </div>
+      <div class="view-bar">
+        <div class="row">
+          <button id="rot-left" title="Rotate view left">⟲ 90°</button>
+          <button id="rot-right" title="Rotate view right">⟳ 90°</button>
+          <button id="flip" title="Mirror the view">Mirror</button>
+          <span class="hint" id="rot-val">0°</span>
+        </div>
+        <label class="toggle"><input type="checkbox" id="safety-off"> <span>Safety off for my driving (no obstacle or edge stops)</span></label>
       </div>
       <section class="panel">
         <div class="row" style="justify-content: space-between;">
@@ -188,6 +202,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
             <label>Obstacle stop (mm)<input type="number" data-set="ex-stopdist" min="80" max="500" step="10"></label>
             <label>360° time (ms)<input type="number" data-set="ex-spin" min="800" max="10000" step="100"></label>
             <label>Head tilt exploring<input type="number" data-set="ex-tilt" min="0" max="255" step="5"></label>
+            <label>Camera reacts within (mm)<input type="number" data-set="ex-react" min="100" max="900" step="50"></label>
             <label>Blocked below (%)<input type="number" data-set="vis-block" min="5" max="80" step="5"></label>
             <label>Floor tolerance<input type="number" data-set="vis-tol" min="0.02" max="0.3" step="0.01"></label>
             <label>Camera FOV (°)<input type="number" data-set="vis-fov" min="40" max="130" step="5"></label>
@@ -333,6 +348,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     if (S.dist != null) hud.push([`⟷ ${S.dist === 0xffff ? "clear" : S.dist + " mm"}`, S.dist !== 0xffff && S.dist < 180]);
     if (S.cliff && !S.cliff.every((x) => x)) hud.push(["EDGE", true]);
     if (d.latch) hud.push(["stopped at edge — let go", true]);
+    if (d.safetyOff) hud.push(["SAFETY OFF", true]);
+    if ($("safety-off").checked !== !!d.safetyOff) { $("safety-off").checked = !!d.safetyOff; $("safety-off").parentElement.classList.toggle("safety-off", !!d.safetyOff); }
     if (d.ex?.running) hud.push([d.ex.state, false]);
     $("hud").innerHTML = hud.map(([t, a]) => `<span class="${a ? "alert" : ""}">${t}</span>`).join("");
     drawOverlay(d.vis);
@@ -425,7 +442,32 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   $("ai-form").addEventListener("submit", (e) => { e.preventDefault(); const t = $("ai-text").value.trim(); if (!t) return; $("ai-text").value = ""; send({ t: "ai", text: t }); });
   $("btn-key").addEventListener("click", () => { const k = $("ai-key").value.trim(); if (!k) return; send({ t: "ai", key: k }); $("ai-key").value = ""; });
   $("ai-auto").addEventListener("change", (e) => send({ t: "ai", auto: e.target.checked }));
-  window.addEventListener("resize", () => drawOverlay(R.tel?.vis));
+  // ---- View rotation (the folded phone's camera can arrive sideways or upside down) ----
+  const VIEW = { deg: 0, mirror: false };
+  try { const v = JSON.parse(localStorage.getItem("looi-remote-view") || "{}"); VIEW.deg = v.deg || 0; VIEW.mirror = !!v.mirror; } catch {}
+  function applyView() {
+    const box = document.querySelector(".video"), rot = $("rot");
+    const side = VIEW.deg % 180 !== 0;
+    box.style.aspectRatio = side ? "3 / 4" : "4 / 3";
+    const w = box.clientWidth, h = box.clientHeight;
+    rot.style.width = (side ? h : w) + "px"; rot.style.height = (side ? w : h) + "px";
+    rot.style.transform = `translate(-50%, -50%) rotate(${VIEW.deg}deg) scaleX(${VIEW.mirror ? -1 : 1})`;
+    $("rot-val").textContent = `${VIEW.deg}°${VIEW.mirror ? " · mirrored" : ""}`;
+    $("flip").classList.toggle("on", VIEW.mirror);
+    try { localStorage.setItem("looi-remote-view", JSON.stringify(VIEW)); } catch {}
+    drawOverlay(R.tel?.vis);
+  }
+  $("rot-left").addEventListener("click", () => { VIEW.deg = (VIEW.deg + 270) % 360; applyView(); });
+  $("rot-right").addEventListener("click", () => { VIEW.deg = (VIEW.deg + 90) % 360; applyView(); });
+  $("flip").addEventListener("click", () => { VIEW.mirror = !VIEW.mirror; applyView(); });
+  window.addEventListener("resize", applyView);
+  applyView();
+
+  // ---- Safety off for remote driving ----
+  $("safety-off").addEventListener("change", (e) => {
+    send({ t: "safety", off: e.target.checked });
+    e.target.parentElement.classList.toggle("safety-off", e.target.checked);
+  });
   if (q0) link();
 })();
 </script>

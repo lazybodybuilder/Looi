@@ -359,6 +359,7 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
           <label>Run for up to (min)<input type="number" id="ex-mins" value="10" min="1" max="60" step="1"></label>
           <label class="toggle"><input type="checkbox" id="ex-lights" checked> Light on in the dark</label>
           <label>Head tilt while exploring<input type="number" id="ex-tilt" value="150" min="0" max="255" step="5"></label>
+          <label>Camera reacts within (mm)<input type="number" id="ex-react" value="300" min="100" max="900" step="50"></label>
           <label class="toggle"><input type="checkbox" id="ex-peek" checked> Take a second look when camera and distance disagree</label>
         </div>
         <p class="hint">Calibrate first: press <b>Test 360° spin</b> and adjust "Time for one 360°" until LOOI ends facing where it started. The scan map depends on it. Keep this tab in front while exploring; the browser slows background tabs, so exploring stops if you switch away.</p>
@@ -1128,7 +1129,7 @@ You control a real robot on a real desk. Rules:
   const NB = 12; // 30° sectors
   const OPEN = 900; // mm treated as "open" (sensor reads FFFF beyond ~85 cm)
   // Remember explore settings between sessions
-  ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-tilt"].forEach((id) => {
+  ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-tilt", "ex-react"].forEach((id) => {
     try { const v = localStorage.getItem("looi-" + id); if (v != null) $(id).value = v; } catch {}
     $(id).addEventListener("change", () => { try { localStorage.setItem("looi-" + id, $(id).value); } catch {} });
   });
@@ -1283,10 +1284,15 @@ You control a real robot on a real desk. Rules:
         let turn = EX.wander;
         if ($("vis-steer").checked && visFresh()) {
           const blk = visNum("vis-block", 30) / 100;
-          if (VIS.center < blk && now > (EX.visIgnoreUntil || 0)) {
+          // The camera can't judge distance on its own, so it only triggers avoidance when the distance sensor
+          // confirms the obstacle is within the reaction distance, or reads nothing at all (obstacle off-axis)
+          // while the camera sees the floor almost completely covered. Otherwise it just leans away.
+          const reactMm = exNum("#ex-react", 300), dNow = effDist();
+          const camNear = dNow < reactMm || (dNow >= OPEN && VIS.center < blk * 0.5);
+          if (VIS.center < blk && camNear && now > (EX.visIgnoreUntil || 0)) {
             EX.visBlockSince ||= now;
             // Camera says blocked but the distance sensor sees room: tilt the head for a second look before reacting.
-            if (now - EX.visBlockSince > 200 && $("ex-peek").checked && effDist() > 350 && now > (EX.peekCooldown || 0)) {
+            if (now - EX.visBlockSince > 200 && $("ex-peek").checked && dNow >= OPEN && now > (EX.peekCooldown || 0)) {
               await exSend(0, 0);
               exEvent("camera unsure — taking a second look");
               return exEnter("peek");
@@ -1822,7 +1828,7 @@ You control a real robot on a real desk. Rules:
   //   The phone stays in charge of safety: deadman on remote driving, forward block, cliff latch.
   // ===================================================================
   var REM = { peer: null, conn: null, call: null, code: null, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
-  const REMOTE_SETTINGS = ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-lights", "ex-tilt", "ex-peek",
+  const REMOTE_SETTINGS = ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-lights", "ex-tilt", "ex-react", "ex-peek",
     "vis-block", "vis-tol", "vis-fov", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
   function remCode(fresh) {
     const alpha = "abcdefghjkmnpqrstuvwxyz23456789";
@@ -1886,6 +1892,7 @@ You control a real robot on a real desk. Rules:
     REM.call = null;
     try { REM.conn?.close(); } catch {}
     REM.conn = null;
+    if (REM.safetyOff) { REM.safetyOff = false; log("sys", "Remote: safety checks back on (PC left)."); }
     if (why) { log("sys", "Remote: " + why + "."); if (REM.peer) remStatus("Waiting for PC", "warn"); }
   }
   function remCallVideo() {
@@ -1905,7 +1912,7 @@ You control a real robot on a real desk. Rules:
       ex: { running: EX.running, mode: EX.mode, state: $("ex-state").textContent, event: $("ex-event").textContent, legs: EX.legs, scans: EX.scans, edges: EX.edgeCount },
       vis: visFresh() ? { cols: VIS.cols, center: VIS.center, best: VIS.bestCol, fps: VIS.fps, block: visNum("vis-block", 30) / 100 } : null,
       cam: VIS.running, face: FACE.on, ai: { busy: AI.busy, key: !!$("ai-key").value.trim(), auto: !!AI.autoTimer },
-      remoteDriving: !!REM.driveTimer, latch: REM.latch, echo: ECHO.mm,
+      remoteDriving: !!REM.driveTimer, latch: REM.latch, safetyOff: !!REM.safetyOff, echo: ECHO.mm,
     });
   }
 
@@ -1919,6 +1926,7 @@ You control a real robot on a real desk. Rules:
       if (Date.now() - REM.lastDrive > 300 || (f === 0 && t === 0)) { REM.latch = false; remStopDrive(true); return; }
       if (!device?.gatt?.connected) { remStopDrive(false); return; }
       if (REM.latch) return;
+      if (REM.safetyOff) { write("fed0", new Uint8Array([sb(f), sb(t)]), { response: false, quiet: true }).catch(() => {}); return; } // PC chose "safety off": no obstacle or edge checks
       if (!cliffAllOn()) { REM.latch = true; write("fed0", fromHex(MOVE.stop), { response: false }).catch(() => {}); remNote("Edge detected — stopped. Let go of the joystick, then back away."); return; }
       if (f > 0 && effDist() < 120) { f = 0; if (!REM.blockNoted) { REM.blockNoted = true; remNote("Obstacle right ahead — forward blocked, you can still turn or reverse."); } } else REM.blockNoted = false;
       write("fed0", new Uint8Array([sb(f), sb(t)]), { response: false, quiet: true }).catch(() => {});
@@ -1955,6 +1963,10 @@ You control a real robot on a real desk. Rules:
       case "face": d.on ? faceOn() : faceOff(); break;
       case "reconnect": if (device) autoReconnect(); else remNote("Tap Connect LOOI on the phone once; after that the PC can reconnect it."); break;
       case "handshake": await handshake(); break;
+      case "safety":
+        REM.safetyOff = !!d.off; REM.latch = false;
+        log(REM.safetyOff ? "err" : "sys", REM.safetyOff ? "Remote: SAFETY OFF — obstacle and edge checks disabled for PC driving." : "Remote: safety checks back on for PC driving.");
+        break;
       case "echo-reset": $("ex-echo-reset").click(); break;
       case "setting": {
         if (!REMOTE_SETTINGS.includes(d.id) || !$(d.id)) break;

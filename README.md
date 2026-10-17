@@ -13,8 +13,8 @@ A single-page controller for the TangibleFuture LOOI desk robot. It talks straig
 - **Explore mode**: wanders on its own, scans 360° at obstacles, escapes desk edges, remembers its last 6 legs, and turns the light on in the dark
 - **Training wheels**: records your joystick driving, learns your style and drives like you
 - **AI pilot**: an OpenAI model with tool calls, gated by a safety layer, and it can see through the camera
-- **Eyes**: rear-camera free-floor detection that steers Explore, a head-tilt "second look" when camera and distance disagree, and a full-screen face for the Flip's cover screen
-- **Remote console**: live camera with vision overlay, telemetry, joystick, Explore, AI chat and settings from a PC browser. The phone keeps a 300 ms deadman, forward block and edge stop on remote driving
+- **Eyes**: rear-camera free-floor detection that steers Explore (it only triggers avoidance within the *Camera reacts within* distance, 300 mm by default), a head-tilt "second look" when camera and distance disagree, and a full-screen face for the Flip's cover screen
+- **Remote console**: live camera with vision overlay, telemetry, joystick, Explore, AI chat and settings from a PC browser. Rotate or mirror the video to match how the phone sits. Remote driving keeps a 300 ms deadman (if the PC goes quiet, it stops). The forward block and edge stop can be switched off with **Safety off** on the PC; they come back on when the PC disconnects
 
 ## Run on the phone (Galaxy Z Flip 4 on LOOI)
 1. Force-stop the official LOOI app so it releases Bluetooth.
