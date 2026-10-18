@@ -1892,8 +1892,11 @@ You control a real robot on a real desk. Rules:
   //   thinking / sleepy / calm for AI, low battery and idle
   const BLOCKED_STATES = ["scan", "peek", "pause", "backup", "escape", "turnto", "maneuver", "lifted"];
   function faceMood(now) {
-    if (S.cliff && !S.cliff.every((x) => x === 1)) return "scared";
-    const blocked = (EX.running && BLOCKED_STATES.includes(EX.state)) || (EX.running && effDist() < exNum("#ex-react", 300)) || REM.latch || REM.blockNoted;
+    const moving = EX.running || !!REM.driveTimer || driving;
+    // Scared only when lifted, or at an edge while moving: a dusty or docked cliff sensor shouldn't keep the face red.
+    if (S.cliff && (cliffAllOff() || (moving && !cliffAllOn()))) return "scared";
+    // Remote block flags only count while the PC is actually driving; they used to stick after the joystick was released.
+    const blocked = (EX.running && BLOCKED_STATES.includes(EX.state)) || (EX.running && effDist() < exNum("#ex-react", 300)) || (!!REM.driveTimer && (REM.latch || REM.blockNoted));
     if (blocked) return "blocked";
     if (now < (FACE.happyUntil || 0)) return "happy";
     if (EX.running || REM.driveTimer || driving) return "hunt";
@@ -2525,6 +2528,7 @@ You control a real robot on a real desk. Rules:
   function remStopDrive(send) {
     if (!REM.driveTimer) return;
     clearInterval(REM.driveTimer); REM.driveTimer = null;
+    REM.latch = false; REM.blockNoted = false;
     if (send && device?.gatt?.connected) write("fed0", fromHex(MOVE.stop), { response: false }).catch(() => {});
   }
 
