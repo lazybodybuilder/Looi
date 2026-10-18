@@ -68,6 +68,12 @@ button.listening { background: var(--good); color: #fff; border-color: var(--goo
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .hint { color: var(--muted); font-size: .82rem; margin: 0; }
+h3.sub { font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; }
+.pat-alerts { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+.pat-alerts:empty { display: none; }
+.pat-alerts li { font-size: .78rem; color: var(--muted); }
+.pat-alerts li.new { color: var(--fg); }
+.pat-alerts img { width: 100%; border-radius: 8px; display: block; margin-bottom: 4px; }
 .video { position: relative; aspect-ratio: 4 / 3; background: #05090c; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
 .video .rot { position: absolute; left: 50%; top: 50%; width: 100%; height: 100%; transform: translate(-50%, -50%); }
 .video .rot video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
@@ -206,6 +212,14 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
               <button id="nav-path-clear">Clear path</button>
               <button id="nav-reset">Reset position</button>
             </div>
+            <h3 class="sub">Patrol &amp; guard</h3>
+            <p class="hint" id="pat-line">No waypoints yet. Drive to a spot and press Add waypoint.</p>
+            <div class="row">
+              <button id="pat-add">Add waypoint here</button>
+              <button id="pat-clear">Clear waypoints</button>
+              <button class="primary" id="pat-go" disabled>Start patrol</button>
+            </div>
+            <ul class="pat-alerts" id="pat-alerts"></ul>
           </div>
         </section>
       </div>
@@ -287,6 +301,16 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
             <label>Camera FOV (°)<input type="number" data-set="vis-fov" min="40" max="130" step="5"></label>
             <label>360° time (ms)<input type="number" data-set="ex-spin" min="800" max="10000" step="100"></label>
             <label>mm/s at speed 100<input type="number" data-set="nav-speed" min="30" max="1000" step="10"></label>
+            <label>Patrol: watch per point (s)<input type="number" data-set="pat-watch" min="5" max="600" step="5"></label>
+            <label>Patrol: laps (0 = no limit)<input type="number" data-set="pat-laps" min="0" max="50" step="1"></label>
+            <label>Patrol: minutes<input type="number" data-set="pat-mins" min="1" max="240" step="1"></label>
+            <label>Motion alert above (%)<input type="number" data-set="pat-sens" min="1" max="40" step="1"></label>
+            <label>ntfy topic (phone alerts)<input type="text" data-set="pat-ntfy" autocomplete="off" spellcheck="false"></label>
+          </div>
+          <div class="row">
+            <label class="toggle"><input type="checkbox" data-set="pat-speak"> Say "Who's there?"</label>
+            <label class="toggle"><input type="checkbox" data-set="pat-flash"> Light on alert</label>
+            <label class="toggle"><input type="checkbox" data-set="pat-home"> Home after patrol</label>
           </div>
           <div class="row">
             <label class="toggle"><input type="checkbox" data-set="nav-autospeed"> Learn speed from sensor</label>
@@ -478,6 +502,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     if (d.t === "log") return addLog(d.kind, d.line);
     if (d.t === "chat") return addChat(d.kind, d.text);
     if (d.t === "note") { note(d.msg); addLog("err", "Phone: " + d.msg); return; }
+    if (d.t === "patrol-alert") return patAlert(d);
     if (d.t === "video" && !d.on) { $("video").srcObject = null; $("video-empty").hidden = false; $("video-empty").textContent = "Camera is off on the phone. Press Camera on."; }
   }
 
@@ -494,7 +519,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     if (d.nav?.path) NAV.path = d.nav.path;
     if (d.nav?.pts) NAV.pts = d.nav.pts;
     $("t-fused").textContent = d.fused ? `${Math.min(d.fused[3], d.fused[4], d.fused[5]) >= 900 ? "clear" : Math.min(d.fused[3], d.fused[4], d.fused[5]) + " mm"} (camera + distance + close-range)` : d.nav && !d.nav.cal ? `camera still learning ranging (${d.nav.samples})` : "—";
-    navLine(); drawRadar();
+    navLine(); patLine(); drawRadar();
     $("nav-home-go").textContent = d.ex?.running && d.ex.mode === "home" ? "Stop going home" : "Go home";
     $("nav-home-go").disabled = !d.nav?.home;
     const S = d.S || {};
@@ -733,6 +758,19 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
       g.strokeStyle = S.dist === 0xffff ? "rgba(227,233,238,.35)" : "#ff6b5b"; g.lineWidth = 2 * dpr; g.setLineDash([4 * dpr, 4 * dpr]);
       g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx, cy - d * sc); g.stroke(); g.setLineDash([]);
     }
+    // patrol waypoints: numbered, joined in order, the current target ringed
+    if (nav.wps?.length) {
+      const pts = nav.wps.map(([x, y]) => toS(x, y));
+      g.strokeStyle = "rgba(96,165,250,.55)"; g.lineWidth = 1.5 * dpr; g.setLineDash([5 * dpr, 4 * dpr]);
+      g.beginPath(); pts.forEach(([sx, sy], i) => (i ? g.lineTo(sx, sy) : g.moveTo(sx, sy))); if (pts.length > 2) g.closePath(); g.stroke(); g.setLineDash([]);
+      pts.forEach(([sx, sy], i) => {
+        const cur = nav.pat?.on && nav.pat.i === i;
+        g.fillStyle = cur ? "#60a5fa" : "rgba(96,165,250,.8)";
+        g.beginPath(); g.arc(sx, sy, (cur ? 7 : 5) * dpr, 0, Math.PI * 2); g.fill();
+        if (cur) { g.strokeStyle = "#60a5fa"; g.lineWidth = 1.5 * dpr; g.beginPath(); g.arc(sx, sy, 12 * dpr, 0, Math.PI * 2); g.stroke(); }
+        g.fillStyle = "#e3e9ee"; g.fillText(String(i + 1), sx + 8 * dpr, sy - 6 * dpr);
+      });
+    }
     // home
     if (nav.home) {
       let [hx, hy] = toS(nav.home.x, nav.home.y);
@@ -764,6 +802,40 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   $("nav-path-clear").addEventListener("click", () => send({ t: "nav", op: "path-clear" }));
   $("nav-reset").addEventListener("click", () => send({ t: "nav", op: "reset" }));
   $("btn-speedtest").addEventListener("click", () => send({ t: "navcal" }));
+  // ---- Patrol & guard ----
+  $("pat-add").addEventListener("click", () => send({ t: "nav", op: "wp-add" }));
+  $("pat-clear").addEventListener("click", () => { if (confirm("Clear all patrol waypoints?")) send({ t: "nav", op: "wp-clear" }); });
+  $("pat-go").addEventListener("click", () => {
+    const on = R.tel?.nav?.pat?.on;
+    if (!on && "Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+    send({ t: "explore", mode: on ? "stop" : "patrol" });
+  });
+  function patLine() {
+    const n = R.tel?.nav, p = n?.pat, k = n?.wps?.length || 0;
+    $("pat-go").textContent = p?.on ? "Stop patrol" : "Start patrol";
+    $("pat-go").disabled = !p?.on && (!k || !R.tel?.ble || !!R.tel?.ex?.running);
+    $("pat-line").textContent = !k ? "No waypoints yet. Drive to a spot and press Add waypoint."
+      : p?.on ? `Patrolling: ${p.watch ? "watching at" : "driving to"} point ${p.i + 1} of ${k}, lap ${p.lap + 1}${p.watch && p.motion != null ? ` · motion ${p.motion}%` : ""}`
+      : `${k} waypoint${k > 1 ? "s" : ""} set (blue on the radar).${R.tel?.cam ? "" : " Patrol turns the phone camera on to watch."}`;
+  }
+  let patAudio = null;
+  function patAlert(d) {
+    const when = new Date(d.at || Date.now()).toLocaleTimeString();
+    const ul = $("pat-alerts"), li = document.createElement("li");
+    li.className = "new";
+    if (typeof d.img === "string" && d.img.startsWith("data:image/jpeg;base64,")) { const im = document.createElement("img"); im.src = d.img; im.alt = "Patrol alert photo"; li.append(im); }
+    li.append(`${when} · point ${Number(d.wp) || "?"} · ${Number(d.pct) || 0}% changed`);
+    ul.prepend(li);
+    while (ul.children.length > 12) ul.lastChild.remove();
+    setTimeout(() => li.classList.remove("new"), 30000);
+    const msg = `Motion at waypoint ${Number(d.wp) || "?"} (${when})`;
+    note("🚨 " + msg); addLog("err", "Patrol alert: " + msg);
+    try { // two short beeps
+      patAudio ||= new AudioContext();
+      [0, 0.25].forEach((dt) => { const o = patAudio.createOscillator(), g = patAudio.createGain(); o.frequency.value = 880; g.gain.value = 0.15; o.connect(g).connect(patAudio.destination); o.start(patAudio.currentTime + dt); o.stop(patAudio.currentTime + dt + 0.15); });
+    } catch {}
+    if (document.hidden && "Notification" in window && Notification.permission === "granted") { try { new Notification("LOOI patrol alert", { body: msg }); } catch {} }
+  }
   $("btn-range-reset").addEventListener("click", () => send({ t: "range-reset" }));
   drawRadar();
 

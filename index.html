@@ -89,7 +89,7 @@ button.stop { background: var(--bad); color: #fff; border-color: var(--bad); }
 .hint { color: var(--muted); font-size: .82rem; margin: 0; overflow-wrap: anywhere; }
 label { font-size: .85rem; color: var(--muted); display: grid; gap: 4px; }
 input[type="range"] { width: 100%; accent-color: var(--accent); }
-input.hex, select, input[type="number"] {
+input.hex, select, input[type="number"], .ex-fields input[type="text"] {
   width: 100%; min-width: 0; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--tape); color: var(--fg); font-size: .9rem;
 }
@@ -158,6 +158,9 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
   h1 { font-size: 1.1rem; } .sub { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+.pat-alerts { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.pat-alerts li { font-size: .8rem; }
+.pat-alerts img { width: 100%; border-radius: 8px; display: block; margin-bottom: 4px; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="sec.js?v=1"></script>
@@ -452,6 +455,39 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
       <button id="range-reset">Reset camera ranging</button>
     </div>
     <p class="hint">Heading comes from the phone's gyroscope when it has one, so turns, scans and Go home use LOOI's real rotation. Distance is still estimated from the drive commands (there are no wheel sensors), and "mm/s at speed 100" tunes itself whenever LOOI drives straight at something the distance sensor can see. Pressing <b>Test 360° spin</b> also sets the spin time from the gyro. You can still set speed by hand: run the speed test, measure how far LOOI moved in mm, and enter it in the Eyes panel. Camera ranging learns by itself whenever the distance sensor sees something; drive toward a few objects to teach it.</p>
+  </section>
+
+  <section class="panel" id="patrol-panel">
+    <div class="row" style="justify-content: space-between;">
+      <h2>Patrol &amp; guard</h2>
+      <span class="chip" id="st-patrol">Patrol off</span>
+    </div>
+    <dl class="kv">
+      <dt>Waypoints</dt><dd id="pat-wps">none yet</dd>
+      <dt>Status</dt><dd id="pat-status">—</dd>
+      <dt>Motion</dt><dd id="pat-motion">—</dd>
+    </dl>
+    <div class="row">
+      <button id="pat-add">Add waypoint here</button>
+      <button id="pat-clear">Clear waypoints</button>
+      <button class="primary" id="pat-start" disabled>Start patrol</button>
+      <button id="pat-stop" disabled>Stop patrol</button>
+    </div>
+    <div class="ex-fields">
+      <label>Watch at each point (s)<input type="number" id="pat-watch" value="20" min="5" max="600" step="5"></label>
+      <label>Laps (0 = until time runs out)<input type="number" id="pat-laps" value="0" min="0" max="50" step="1"></label>
+      <label>Patrol for up to (min)<input type="number" id="pat-mins" value="30" min="1" max="240" step="1"></label>
+      <label>Motion alert above (% of view)<input type="number" id="pat-sens" value="4" min="1" max="40" step="1"></label>
+      <label>Phone alerts via ntfy topic (optional)<input type="text" id="pat-ntfy" placeholder="e.g. looi-akshay-7f3k" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <div class="row">
+      <label class="toggle"><input type="checkbox" id="pat-speak" checked> Say "Who's there?" on alert</label>
+      <label class="toggle"><input type="checkbox" id="pat-flash"> Light on during alerts</label>
+      <label class="toggle"><input type="checkbox" id="pat-home" checked> Go home when the patrol ends</label>
+    </div>
+    <h2 style="margin-top: 12px;">Alerts</h2>
+    <ul class="pat-alerts" id="pat-alerts"><li class="hint">No alerts yet.</li></ul>
+    <p class="hint">Drive LOOI to each spot you want checked and press <b>Add waypoint here</b> (set home first if you want it to return). On patrol, LOOI drives to each point in turn, avoiding obstacles like in Explore, then parks and watches with the camera. If enough of the view changes, it takes a photo, sends it to the PC, and optionally to your phone through <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a> (install the ntfy app and subscribe to the same topic; anyone who knows the topic name can read it, so pick a long random one). The camera must be on. Waypoints use the same position estimate as Go home, so <b>Reset position</b> clears them, and long patrols drift: start from home.</p>
   </section>
 
   <section class="panel ai" id="ai-panel">
@@ -1212,7 +1248,7 @@ You control a real robot on a real desk. Rules:
     }
     if (state === "cruise") EX.leg = { h0: EX.heading, t: Date.now() };
     EX.state = state; EX.t0 = Date.now(); EX.data = data;
-    $("ex-state").textContent = { cruise: EX.mode === "imitate" ? "Cruising your way" : EX.mode === "home" ? "Heading home" : "Cruising", maneuver: "Avoiding, your style", peek: "Taking a second look", scan: "Scanning 360°", turnto: "Turning to open space", backup: "Backing away from edge", escape: "Turning away from edge", lifted: "Picked up — waiting", pause: "Pausing" }[state] || state;
+    $("ex-state").textContent = { cruise: EX.mode === "imitate" ? "Cruising your way" : EX.mode === "home" ? "Heading home" : EX.mode === "patrol" ? `Patrolling to point ${PAT.i + 1}` : "Cruising", watch: "Watching for motion", maneuver: "Avoiding, your style", peek: "Taking a second look", scan: "Scanning 360°", turnto: "Turning to open space", backup: "Backing away from edge", escape: "Turning away from edge", lifted: "Picked up — waiting", pause: "Pausing" }[state] || state;
     if (state === "scan") { EX.samples = []; EX.data.dir = Math.random() < 0.5 ? 1 : -1; EX.data.h0 = EX.heading; odoStep(Date.now()); EX.data.g0 = ODO.th; EX.data.gyro = gyroOk(); EX.scans++; }
     if ((state === "turnto" || state === "escape") && gyroOk()) { odoStep(Date.now()); EX.data.g0 = ODO.th; EX.data.gyro = true; }
     $("ex-counts").textContent = `${EX.scans} · ${EX.edgeCount}`;
@@ -1244,8 +1280,9 @@ You control a real robot on a real desk. Rules:
       for (const leg of EX.legs) if (Math.abs(angDiff(a, leg.heading)) < 35) f *= 0.65; // been that way recently
       const last = EX.legs[EX.legs.length - 1];
       if (last && Math.abs(angDiff(a, last.heading + 180)) < 40) f *= 0.5; // the way we just came from
-      if (EX.mode === "home" && ODO.home) { // prefer openings that point home
-        const bearing = (Math.atan2(ODO.home.y - ODO.y, ODO.home.x - ODO.x) * 180) / Math.PI;
+      const tgt = navTarget();
+      if (tgt) { // prefer openings that point at the target (home or the next waypoint)
+        const bearing = (Math.atan2(tgt.y - ODO.y, tgt.x - ODO.x) * 180) / Math.PI;
         f *= 0.5 + (1 + Math.cos((angDiff(a, bearing) * Math.PI) / 180)) / 2;
       }
       return f;
@@ -1364,15 +1401,26 @@ You control a real robot on a real desk. Rules:
           slow *= Math.max(0.5, Math.min(1, VIS.center / 0.6));
           slow = Math.max(20, slow);
         }
-        if (EX.mode === "home" && ODO.home) {
-          const dx = ODO.home.x - ODO.x, dy = ODO.home.y - ODO.y, dh = Math.hypot(dx, dy);
-          if (dh < 120) { await exSend(0, 0); exEvent("home reached"); return stopExplore("home reached"); }
+        const tgt = navTarget();
+        if (tgt) {
+          const dx = tgt.x - ODO.x, dy = tgt.y - ODO.y, dh = Math.hypot(dx, dy);
+          if (EX.mode === "patrol") {
+            if (dh < 120) { await exSend(0, 0); exEvent(`waypoint ${PAT.i + 1} reached — watching`); return exEnter("watch"); }
+            if (Date.now() - PAT.legAt > 90000) { exEvent(`can't reach waypoint ${PAT.i + 1} — skipping it`); patNext(); return; }
+          } else if (dh < 120) { await exSend(0, 0); exEvent("home reached"); return stopExplore("home reached"); }
           const err = angDiff((Math.atan2(dy, dx) * 180) / Math.PI, ODO.th);
           if (Math.abs(err) > 50) return exSend(0, Math.sign(err) * turnSp * 0.8); // face home first
           turn = Math.max(-35, Math.min(35, err * 1.2)) + turn * 0.2;
           slow = Math.min(slow, Math.max(22, dh / 4));
         }
         return exSend(slow, turn);
+      }
+      case "watch": {
+        await exSend(0, 0);
+        patWatch(since());
+        if (since() < exNum("#pat-watch", 20) * 1000) return;
+        patNext();
+        return;
       }
       case "pause": {
         await exSend(0, 0);
@@ -1468,14 +1516,16 @@ You control a real robot on a real desk. Rules:
     if (!device?.gatt?.connected || EX.running) return;
     if (mode === "imitate" && !TR.profile) { trStatus("Learn your style first: record some driving, then press Learn my style."); return; }
     if (mode === "home" && !ODO.home) { log("err", "Set a home position first."); return; }
+    if (mode === "patrol" && !PAT.wps.length) { log("err", "Add at least one waypoint first."); return; }
     if (TR.recording) toggleRecording();
     EX.mode = mode; EX.heading = ODO.th; EX.lastSendAt = 0; EX.lastTurn = 0; EX.legs = []; EX.leg = null; renderHistory();
     if (driving) haltDrive(true);
     if (AI.autoTimer) stopAuto("explore mode started");
     EX.running = true; EX.scans = 0; EX.edgeCount = 0; EX.edges = []; EX.lastLight = null; EX.bins = null; EX.best = -1;
-    EX.endAt = Date.now() + exNum("#ex-mins", 10) * 60000;
+    EX.endAt = Date.now() + (mode === "patrol" ? exNum("#pat-mins", 30) : exNum("#ex-mins", 10)) * 60000;
+    if (mode === "patrol") patBegin();
     $("ex-start").disabled = true; $("ex-stop").disabled = false; $("ex-cal").disabled = true;
-    chip("st-explore", mode === "imitate" ? "Driving like you" : mode === "home" ? "Going home" : "Exploring", "ok");
+    chip("st-explore", mode === "imitate" ? "Driving like you" : mode === "home" ? "Going home" : mode === "patrol" ? "Patrolling" : "Exploring", "ok");
     $("tr-run").disabled = true;
     exEvent(mode === "imitate" ? "started driving in your style" : "started");
     EX.peekCooldown = 0; EX.visIgnoreUntil = 0;
@@ -1495,6 +1545,7 @@ You control a real robot on a real desk. Rules:
     $("ex-start").disabled = !on; $("ex-stop").disabled = true; $("ex-cal").disabled = !on;
     $("tr-run").disabled = !on || !TR.profile;
     if (EX.state === "off") EX.mode = "explore";
+    patUi();
   }
   $("ex-start").addEventListener("click", () => startExplore("explore"));
   $("ex-stop").addEventListener("click", () => stopExplore("stopped by you"));
@@ -1895,6 +1946,8 @@ You control a real robot on a real desk. Rules:
     const moving = EX.running || !!REM.driveTimer || driving;
     // Scared only when lifted, or at an edge while moving: a dusty or docked cliff sensor shouldn't keep the face red.
     if (S.cliff && (cliffAllOff() || (moving && !cliffAllOn()))) return "scared";
+    if (EX.mode === "patrol" && now - PAT.lastAlert < 5000) return "alarm";
+    if (EX.running && EX.state === "watch") return "watch";
     // Remote block flags only count while the PC is actually driving; they used to stick after the joystick was released.
     const blocked = (EX.running && BLOCKED_STATES.includes(EX.state)) || (EX.running && effDist() < exNum("#ex-react", 300)) || (!!REM.driveTimer && (REM.latch || REM.blockNoted));
     if (blocked) return "blocked";
@@ -1918,6 +1971,8 @@ You control a real robot on a real desk. Rules:
     thinking: { col: [167, 139, 250], tired: 0.2, angry: 0,    happy: 0,    h: 0.95, curious: 1 },
     sleepy:   { col: [95, 245, 224],  tired: 0.6, angry: 0,    happy: 0,    h: 0.85, curious: 0 },
     calm:     { col: [95, 245, 224],  tired: 0,   angry: 0,    happy: 0.12, h: 1,    curious: 1 },
+    watch:    { col: [96, 165, 250],  tired: 0.15, angry: 0.1, happy: 0,    h: 0.9,  curious: 1.3 },
+    alarm:    { col: [255, 59, 59],   tired: 0,   angry: 0.55, happy: 0,    h: 1.1,  curious: 0, shake: true },
   };
   // Smoothed values so every mood change glides instead of jumping.
   const FS = { col: [95, 245, 224], tired: 0, angry: 0, happy: 0, h: 1, curious: 1, sweat: [] };
@@ -1943,6 +1998,8 @@ You control a real robot on a real desk. Rules:
     else if (mood === "blocked") { tx = Math.sin(t * 1.6) * 0.95; ty = Math.sin(t * 2.7) * 0.45; }
     else if (mood === "thinking") { tx = -0.7; ty = -0.7; }
     else if (mood === "sleepy") { tx = 0; ty = 0.5; }
+    else if (mood === "watch") { tx = Math.sin(t * 0.6) * 0.85; ty = 0; }
+    else if (mood === "alarm") { tx = 0; ty = -0.1; }
     else if (mood === "scared") { tx = 0; ty = -0.3; }
     else { // idle glances
       if (!FACE.idleAt || now > FACE.idleAt) { FACE.idleX = (Math.random() * 2 - 1) * 0.8; FACE.idleY = (Math.random() * 2 - 1) * 0.4; FACE.idleAt = now + 1200 + Math.random() * 2500; }
@@ -2205,9 +2262,11 @@ You control a real robot on a real desk. Rules:
     if (op === "home-set") { ODO.home = { x: ODO.x, y: ODO.y }; log("sys", "Home set at the current position."); }
     if (op === "home-clear") { ODO.home = null; log("sys", "Home cleared."); }
     if (op === "home-go") { if (!ODO.home) { log("err", "Set a home position first."); return "Set a home position first."; } startExplore("home"); }
-    if (op === "reset") { ODO.x = ODO.y = 0; ODO.th = 0; ODO.path = []; ODO.pts = []; ODO.home = null; EX.heading = 0; log("sys", "Position reset: LOOI is now at 0,0 facing 0°. Home and path cleared."); }
+    if (op === "reset") { ODO.x = ODO.y = 0; ODO.th = 0; ODO.path = []; ODO.pts = []; ODO.home = null; EX.heading = 0; patSetWps([]); log("sys", "Position reset: LOOI is now at 0,0 facing 0°. Home, path and waypoints cleared."); }
     if (op === "rec") { ODO.rec = !!on; log("sys", ODO.rec ? "Path recording on (last 5 minutes)." : "Path recording paused."); }
     if (op === "path-clear") { ODO.path = []; log("sys", "Path cleared."); }
+    if (op === "wp-add") patAdd();
+    if (op === "wp-clear") { patSetWps([]); log("sys", "Waypoints cleared."); }
     navStatus();
     return null;
   }
@@ -2215,6 +2274,156 @@ You control a real robot on a real desk. Rules:
   $("nav-home-go").addEventListener("click", () => navOp("home-go"));
   $("nav-reset").addEventListener("click", () => navOp("reset"));
   $("nav-rec-btn").addEventListener("click", () => navOp("rec", !ODO.rec));
+  // ===================================================================
+  // ---- Patrol & guard ----
+  //   Waypoints are odometry positions. A patrol drives to each in turn using the Explore machinery (obstacle
+  //   avoidance, scans, edge safety), then parks in "watch" and diffs camera frames. Enough change on two frames in
+  //   a row raises an alert: photo, log, PC, optional ntfy push, a spoken challenge and the alarm face.
+  // ===================================================================
+  const PAT = { wps: [], i: 0, lap: 0, stops: 0, legAt: 0, prev: null, hits: 0, lastF: 0, lastAlert: 0, motion: null, alerts: [], cv: null };
+  try { const w = JSON.parse(localStorage.getItem("looi-patrol-wps") || "[]"); if (Array.isArray(w)) PAT.wps = w.filter((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y)); } catch {}
+  ["pat-watch", "pat-laps", "pat-mins", "pat-sens", "pat-ntfy"].forEach((id) => {
+    try { const v = localStorage.getItem("looi-" + id); if (v != null) $(id).value = v; } catch {}
+    $(id).addEventListener("change", () => { try { localStorage.setItem("looi-" + id, $(id).value); } catch {} });
+  });
+  ["pat-speak", "pat-flash", "pat-home"].forEach((id) => {
+    try { const v = localStorage.getItem("looi-" + id); if (v != null) $(id).checked = v === "1"; } catch {}
+    $(id).addEventListener("change", () => { try { localStorage.setItem("looi-" + id, $(id).checked ? "1" : "0"); } catch {} });
+  });
+  function navTarget() {
+    if (EX.mode === "home") return ODO.home;
+    if (EX.mode === "patrol") return PAT.wps[PAT.i] || null;
+    return null;
+  }
+  function patSetWps(list) {
+    PAT.wps = list;
+    try { localStorage.setItem("looi-patrol-wps", JSON.stringify(list)); } catch {}
+    patUi();
+  }
+  function patAdd() {
+    const p = { x: Math.round(ODO.x), y: Math.round(ODO.y) };
+    if (PAT.wps.some((w) => Math.hypot(w.x - p.x, w.y - p.y) < 150)) { log("err", "There's already a waypoint within 15 cm of here."); return; }
+    patSetWps([...PAT.wps, p]);
+    log("sys", `Waypoint ${PAT.wps.length} added at x ${p.x}, y ${p.y} mm.`);
+  }
+  function patBegin() {
+    PAT.lap = 0; PAT.stops = 0; PAT.prev = null; PAT.hits = 0; PAT.motion = null;
+    // start at the nearest waypoint so a patrol begun mid-route doesn't backtrack
+    let best = 0, bd = Infinity;
+    PAT.wps.forEach((w, i) => { const d = Math.hypot(w.x - ODO.x, w.y - ODO.y); if (d < bd) { bd = d; best = i; } });
+    PAT.i = best; PAT.legAt = Date.now();
+    if (!VIS.running) startCamera().catch(() => {});
+    exEvent(`patrol started: ${PAT.wps.length} waypoint${PAT.wps.length > 1 ? "s" : ""}, first stop ${PAT.i + 1}`);
+    patUi();
+  }
+  function patNext() {
+    PAT.prev = null; PAT.hits = 0; PAT.motion = null;
+    PAT.i = (PAT.i + 1) % PAT.wps.length;
+    PAT.stops++; PAT.lap = Math.floor(PAT.stops / PAT.wps.length); // a lap = every waypoint visited once, wherever it started
+    const laps = exNum("#pat-laps", 0);
+    if (laps > 0 && PAT.lap >= laps) {
+      if ($("pat-home").checked && ODO.home) { exEvent(`patrol done (${PAT.lap} lap${PAT.lap > 1 ? "s" : ""}) — going home`); EX.mode = "home"; exEnter("cruise"); }
+      else stopExplore(`patrol done (${PAT.lap} lap${PAT.lap > 1 ? "s" : ""})`);
+      patUi(); return;
+    }
+    PAT.legAt = Date.now();
+    exEnter("cruise");
+    patUi();
+  }
+  // 48×36 grey frame, brightness-normalised so auto-exposure and lights dimming don't count as motion.
+  function patFrame() {
+    const v = $("cam-video");
+    if (!VIS.running || !v.videoWidth) return null;
+    const c = PAT.cv || (PAT.cv = document.createElement("canvas")); c.width = 48; c.height = 36;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(v, 0, 0, 48, 36);
+    const d = g.getImageData(0, 0, 48, 36).data, out = new Float32Array(48 * 36);
+    let sum = 0;
+    for (let i = 0; i < out.length; i++) { out[i] = (d[i * 4] * 77 + d[i * 4 + 1] * 150 + d[i * 4 + 2] * 29) >> 8; sum += out[i]; }
+    const mean = sum / out.length;
+    for (let i = 0; i < out.length; i++) out[i] -= mean;
+    return out;
+  }
+  function patWatch(t) {
+    const now = Date.now();
+    if (now - PAT.lastF < 250) return;
+    PAT.lastF = now;
+    if (t < 1500 || (gyroOk() && Math.abs(GYRO.rate) > 3)) { PAT.prev = null; PAT.hits = 0; return; } // still settling or moving
+    const f = patFrame();
+    if (!f) { PAT.motion = null; $("pat-motion").textContent = "camera off — no motion watch"; return; }
+    if (PAT.prev) {
+      let n = 0;
+      for (let i = 0; i < f.length; i++) if (Math.abs(f[i] - PAT.prev[i]) > 22) n++;
+      const frac = n / f.length;
+      PAT.motion = Math.round(frac * 1000) / 10;
+      $("pat-motion").textContent = `${PAT.motion}% of the view changed`;
+      PAT.hits = frac * 100 >= exNum("#pat-sens", 4) ? PAT.hits + 1 : 0;
+      if (PAT.hits >= 2 && now - PAT.lastAlert > 20000) patAlert(frac);
+    }
+    PAT.prev = f;
+  }
+  function patSnapshot() {
+    const v = $("cam-video");
+    if (!v.videoWidth) return null;
+    const rot = Number($("vis-rot").value) || 0, side = rot % 180 !== 0, mir = $("vis-mirror").checked;
+    const w = 240, h = Math.round((w * v.videoHeight) / v.videoWidth);
+    const c = document.createElement("canvas"); c.width = side ? h : w; c.height = side ? w : h;
+    const g = c.getContext("2d");
+    g.translate(c.width / 2, c.height / 2); g.rotate((rot * Math.PI) / 180); g.scale(mir ? -1 : 1, 1);
+    g.drawImage(v, -w / 2, -h / 2, w, h);
+    return c.toDataURL("image/jpeg", 0.6);
+  }
+  function patAlert(frac) {
+    const now = Date.now(), wp = PAT.i + 1, pct = Math.round(frac * 100), img = patSnapshot();
+    PAT.lastAlert = now; PAT.hits = 0;
+    const a = { at: now, wp, pct, img };
+    PAT.alerts.unshift(a); if (PAT.alerts.length > 8) PAT.alerts.pop();
+    renderPatAlerts();
+    log("err", `Patrol alert: motion at waypoint ${wp} (${pct}% of the view changed).`);
+    exEvent(`motion at waypoint ${wp}!`);
+    navigator.vibrate?.([200, 100, 200]);
+    if ($("pat-speak").checked && "speechSynthesis" in window) { try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance("Hello? Who's there?"); u.pitch = 1.2; speechSynthesis.speak(u); } catch {} }
+    if ($("pat-flash").checked) { write("fed2", fromHex("01")).catch(() => {}); S.light = true; setTimeout(() => { if (!EX.lastLight) { write("fed2", fromHex("00")).catch(() => {}); S.light = false; } }, 6000); }
+    remSend({ t: "patrol-alert", at: now, wp, pct, img });
+    patNtfy(a);
+  }
+  async function patNtfy(a) {
+    const topic = $("pat-ntfy").value.trim();
+    if (!topic || !/^[A-Za-z0-9_-]{1,64}$/.test(topic)) return;
+    try {
+      const headers = { Title: "LOOI patrol alert", Priority: "high", Tags: "rotating_light", Message: `Motion at waypoint ${a.wp} (${a.pct}% of the view changed) at ${new Date(a.at).toLocaleTimeString()}` };
+      let body = headers.Message;
+      if (a.img) { body = await (await fetch(a.img)).blob(); headers.Filename = "looi.jpg"; }
+      const r = await fetch("https://ntfy.sh/" + topic, { method: "PUT", body, headers });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+    } catch (e) { log("err", "Couldn't send the ntfy alert: " + e.message); }
+  }
+  function renderPatAlerts() {
+    const ul = $("pat-alerts");
+    if (!PAT.alerts.length) { ul.innerHTML = '<li class="hint">No alerts yet.</li>'; return; }
+    ul.replaceChildren(...PAT.alerts.map((a) => {
+      const li = document.createElement("li");
+      if (a.img) { const im = document.createElement("img"); im.src = a.img; im.alt = "Patrol alert photo"; li.append(im); }
+      li.append(`${new Date(a.at).toLocaleTimeString()} · point ${a.wp} · ${a.pct}%`);
+      return li;
+    }));
+  }
+  function patUi() {
+    const on = EX.running && EX.mode === "patrol", conn = !!device?.gatt?.connected;
+    $("pat-wps").textContent = PAT.wps.length ? PAT.wps.map((w, i) => `${i + 1}: ${w.x}, ${w.y}`).join(" · ") : "none yet";
+    $("pat-status").textContent = on ? `${EX.state === "watch" ? "watching at" : "driving to"} point ${PAT.i + 1} of ${PAT.wps.length} · lap ${PAT.lap + 1}` : "—";
+    if (!on) $("pat-motion").textContent = "—";
+    chip("st-patrol", on ? "Patrolling" : "Patrol off", on ? "ok" : "");
+    $("pat-start").disabled = on || !conn || !PAT.wps.length || EX.running;
+    $("pat-stop").disabled = !on;
+  }
+  $("pat-add").addEventListener("click", patAdd);
+  $("pat-clear").addEventListener("click", () => { patSetWps([]); log("sys", "Waypoints cleared."); });
+  $("pat-start").addEventListener("click", () => startExplore("patrol"));
+  $("pat-stop").addEventListener("click", () => stopExplore("patrol stopped by you"));
+  setInterval(patUi, 1000);
+  patUi();
+
   async function navSpeedTest() {
     if (!device?.gatt?.connected || EX.running || driving) return;
     log("sys", "Speed test: driving forward at speed 100 for 1 second. Measure how far LOOI moved and enter it as mm/s.");
@@ -2229,7 +2438,8 @@ You control a real robot on a real desk. Rules:
   $("nav-speedtest").addEventListener("click", navSpeedTest);
   // Compact copies for the remote console (rounded, decimated).
   function navTelemetry(full) {
-    const out = { x: Math.round(ODO.x), y: Math.round(ODO.y), th: Math.round(ODO.th * 10) / 10, home: ODO.home && { x: Math.round(ODO.home.x), y: Math.round(ODO.home.y) }, rec: ODO.rec, gyro: gyroOk(), spd: SPD.learned, cal: rangeReady(), samples: rangeSamples() };
+    const out = { x: Math.round(ODO.x), y: Math.round(ODO.y), th: Math.round(ODO.th * 10) / 10, home: ODO.home && { x: Math.round(ODO.home.x), y: Math.round(ODO.home.y) }, rec: ODO.rec, gyro: gyroOk(), spd: SPD.learned, wps: PAT.wps.map((p) => [Math.round(p.x), Math.round(p.y)]),
+      pat: { on: EX.running && EX.mode === "patrol", i: PAT.i, lap: PAT.lap, watch: EX.running && EX.state === "watch", motion: PAT.motion, alerts: PAT.alerts.length }, cal: rangeReady(), samples: rangeSamples() };
     if (full) {
       const step = Math.max(1, Math.ceil(ODO.path.length / 400));
       out.path = ODO.path.filter((_, i) => i % step === 0 || i === ODO.path.length - 1).map((p) => [Math.round(p[0]), Math.round(p[1])]);
@@ -2298,7 +2508,8 @@ You control a real robot on a real desk. Rules:
   // ===================================================================
   var REM = { peer: null, conn: null, call: null, code: null, sess: null, lastRx: 0, media: {}, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
   const REMOTE_SETTINGS = ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-lights", "ex-tilt", "ex-react", "ex-peek",
-    "vis-block", "vis-tol", "vis-fov", "vis-rot", "vis-mirror", "nav-speed", "nav-autospeed", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
+    "vis-block", "vis-tol", "vis-fov", "vis-rot", "vis-mirror", "nav-speed", "nav-autospeed", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style",
+    "pat-watch", "pat-laps", "pat-mins", "pat-sens", "pat-ntfy", "pat-speak", "pat-flash", "pat-home"];
   function remCode(fresh) {
     const alpha = "abcdefghjkmnpqrstuvwxyz23456789";
     const make = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => alpha[b % alpha.length]).join("");
@@ -2550,7 +2761,7 @@ You control a real robot on a real desk. Rules:
       case "light": if (device?.gatt?.connected) await aiLight(!!d.on); break;
       case "explore":
         if (d.mode === "stop") await stopExplore("stopped from PC");
-        else { if (d.mode === "imitate" && !TR.profile) { remNote("No learned style yet — record and learn one first."); break; } remStopDrive(true); startExplore(["imitate", "home"].includes(d.mode) ? d.mode : "explore"); }
+        else { if (d.mode === "imitate" && !TR.profile) { remNote("No learned style yet — record and learn one first."); break; } remStopDrive(true); startExplore(["imitate", "home", "patrol"].includes(d.mode) ? d.mode : "explore"); }
         break;
       case "cal": $("ex-cal").click(); break;
       case "camera":
