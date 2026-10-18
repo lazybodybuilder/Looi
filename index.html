@@ -160,6 +160,7 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="sec.js?v=1"></script>
 </head>
 <body>
 <div class="wrap">
@@ -318,6 +319,7 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
           <label>Camera rotation<select id="vis-rot"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
           <label class="toggle"><input type="checkbox" id="vis-mirror"> Mirror camera</label>
           <label>Drive speed: mm/s at speed 100<input type="number" id="nav-speed" value="200" min="30" max="1000" step="10"></label>
+          <label class="toggle"><input type="checkbox" id="nav-autospeed" checked> Learn speed from the distance sensor</label>
         </div>
         <div class="row">
           <label class="toggle"><input type="checkbox" id="vis-steer" checked> Steer Explore with the camera</label>
@@ -449,7 +451,7 @@ button.mini { padding: 2px 8px; font-size: .75rem; }
       <button id="nav-speedtest">Speed test: 1 s at 100</button>
       <button id="range-reset">Reset camera ranging</button>
     </div>
-    <p class="hint">Position is estimated from the drive commands (there are no wheel sensors), so it drifts over time. Calibrate it first: run the speed test, measure how far LOOI moved in mm, and enter that as "mm/s at speed 100" in the Eyes panel. Camera ranging learns by itself whenever the distance sensor sees something; drive toward a few objects to teach it.</p>
+    <p class="hint">Heading comes from the phone's gyroscope when it has one, so turns, scans and Go home use LOOI's real rotation. Distance is still estimated from the drive commands (there are no wheel sensors), and "mm/s at speed 100" tunes itself whenever LOOI drives straight at something the distance sensor can see. Pressing <b>Test 360° spin</b> also sets the spin time from the gyro. You can still set speed by hand: run the speed test, measure how far LOOI moved in mm, and enter it in the Eyes panel. Camera ranging learns by itself whenever the distance sensor sees something; drive toward a few objects to teach it.</p>
   </section>
 
   <section class="panel ai" id="ai-panel">
@@ -1192,7 +1194,8 @@ You control a real robot on a real desk. Rules:
   function exSend(fwd, turn) {
     // Dead-reckoned heading: no compass, so integrate commanded turn × calibrated spin rate.
     const now = Date.now();
-    if (EX.lastSendAt) EX.heading += EX.lastTurn * degPerUnitMs() * Math.min(150, now - EX.lastSendAt);
+    if (gyroOk()) { odoStep(now); EX.heading = ODO.th; }
+    else if (EX.lastSendAt) EX.heading += EX.lastTurn * degPerUnitMs() * Math.min(150, now - EX.lastSendAt);
     EX.lastSendAt = now; EX.lastTurn = Math.round(turn);
     return write("fed0", new Uint8Array([sb(Math.round(fwd)), sb(Math.round(turn))]), { response: false, quiet: true }).catch(() => {});
   }
@@ -1210,7 +1213,8 @@ You control a real robot on a real desk. Rules:
     if (state === "cruise") EX.leg = { h0: EX.heading, t: Date.now() };
     EX.state = state; EX.t0 = Date.now(); EX.data = data;
     $("ex-state").textContent = { cruise: EX.mode === "imitate" ? "Cruising your way" : EX.mode === "home" ? "Heading home" : "Cruising", maneuver: "Avoiding, your style", peek: "Taking a second look", scan: "Scanning 360°", turnto: "Turning to open space", backup: "Backing away from edge", escape: "Turning away from edge", lifted: "Picked up — waiting", pause: "Pausing" }[state] || state;
-    if (state === "scan") { EX.samples = []; EX.data.dir = Math.random() < 0.5 ? 1 : -1; EX.data.h0 = EX.heading; EX.scans++; }
+    if (state === "scan") { EX.samples = []; EX.data.dir = Math.random() < 0.5 ? 1 : -1; EX.data.h0 = EX.heading; odoStep(Date.now()); EX.data.g0 = ODO.th; EX.data.gyro = gyroOk(); EX.scans++; }
+    if ((state === "turnto" || state === "escape") && gyroOk()) { odoStep(Date.now()); EX.data.g0 = ODO.th; EX.data.gyro = true; }
     $("ex-counts").textContent = `${EX.scans} · ${EX.edgeCount}`;
   }
   const since = () => Date.now() - EX.t0;
@@ -1280,10 +1284,14 @@ You control a real robot on a real desk. Rules:
     const angle = (best + 0.5) * (360 / NB);
     const spin = exNum("#ex-spin", 6000);
     // We're back where we started. Keep turning the same way for `angle`, or go the short way back.
-    const dir = angle <= 180 ? EX.data.dir : -EX.data.dir;
-    const deg = angle <= 180 ? angle : 360 - angle;
+    let dir = angle <= 180 ? EX.data.dir : -EX.data.dir;
+    let deg = angle <= 180 ? angle : 360 - angle;
+    if (EX.data.gyro && gyroOk()) { // aim at the absolute heading of that opening, wherever the spin actually ended
+      const need = angDiff(EX.data.g0 + EX.data.dir * angle, ODO.th);
+      dir = need >= 0 ? 1 : -1; deg = Math.abs(need);
+    }
     exEvent(`most open: ${bins[best] >= OPEN ? "over 85 cm" : bins[best] + " mm"} at ${Math.round(angle)}°${best !== rawBest ? " (skipped a recent path)" : ""} — heading there`);
-    exEnter("turnto", { dir, ms: (deg / 360) * spin });
+    exEnter("turnto", { dir, deg, ms: (deg / 360) * spin });
   }
 
   async function exTick() {
@@ -1346,7 +1354,7 @@ You control a real robot on a real desk. Rules:
                 const dir = bestCol < 4 ? 1 : -1;
                 await exSend(0, 0);
                 exEvent(`camera sees something ahead — turning ${Math.round(deg)}° ${dir > 0 ? "left" : "right"} toward open floor`);
-                return exEnter("turnto", { dir, ms: (deg / 360) * spin });
+                return exEnter("turnto", { dir, deg, ms: (deg / 360) * spin });
               }
               await exSend(0, 0); exEvent("camera sees no open floor ahead — scanning around"); return exEnter("pause", { next: "scan", ms: 200 });
             }
@@ -1376,21 +1384,24 @@ You control a real robot on a real desk. Rules:
         if (since() < 900) return exSend(-30, 0);
         await exSend(0, 0);
         if (EX.data.rescan) return exEnter("pause", { next: "scan", ms: 200 });
-        const dir = Math.random() < 0.5 ? 1 : -1;
-        return exEnter("escape", { dir, ms: (140 + Math.random() * 60) / 360 * spin });
+        const dir = Math.random() < 0.5 ? 1 : -1, deg = 140 + Math.random() * 60;
+        return exEnter("escape", { dir, deg, ms: (deg / 360) * spin });
       }
       case "escape": case "turnto": {
         if (!cliffAllOn()) { await exSend(0, 0); if (recordEdge() > 5) return stopExplore("keeps finding edges — the space is too small"); exEvent("edge while turning"); return exEnter("backup"); }
-        if (since() < EX.data.ms) return exSend(0, EX.data.dir * turnSp);
+        const m = EX.data;
+        const going = m.gyro && m.deg != null && gyroOk() ? m.dir * (ODO.th - m.g0) < m.deg - 4 && since() < m.ms * 2 + 1000 : since() < m.ms;
+        if (going) return exSend(0, m.dir * turnSp);
         await exSend(0, 0);
         return exEnter("pause", { next: "cruise", ms: 200 });
       }
       case "scan": {
         if (!cliffAllOn()) { await exSend(0, 0); recordEdge(); exEvent("edge during scan — backing off"); return exEnter("backup"); }
         const t = since();
-        if (t < spin) {
+        const turned = EX.data.gyro && gyroOk() ? EX.data.dir * (ODO.th - EX.data.g0) : null;
+        if (turned != null ? turned < 360 && t < spin * 2 : t < spin) {
           const vd = $("vis-steer").checked && visFresh() ? (VIS.center >= 0.6 ? OPEN : Math.round((VIS.center / 0.6) * OPEN)) : OPEN;
-          EX.samples.push({ a: (t / spin) * 360, d: Math.min(effDist(), vd), raw: S.dist });
+          EX.samples.push({ a: turned != null ? Math.max(0, turned) : (t / spin) * 360, d: Math.min(effDist(), vd), raw: S.dist });
           if (EX.samples.length % 6 === 0) { EX.bins = null; drawRadar(true); }
           return exSend(0, EX.data.dir * turnSp);
         }
@@ -1495,6 +1506,8 @@ You control a real robot on a real desk. Rules:
     const spin = exNum("#ex-spin", 6000), turnSp = exNum("#ex-turn", 50);
     $("ex-cal").disabled = true; $("ex-start").disabled = true;
     exEvent(`test spin: ${spin} ms at turn speed ${turnSp}`);
+    const useGyro = gyroOk();
+    odoStep(Date.now()); const g0 = ODO.th;
     const end = Date.now() + spin;
     while (Date.now() < end) {
       if (!cliffAllOn()) { exEvent("test spin stopped: edge detected"); break; }
@@ -1502,7 +1515,13 @@ You control a real robot on a real desk. Rules:
       await sleep(50);
     }
     await exSend(0, 0);
-    exEvent("test spin done — overshot? lower the time. Short? raise it.");
+    await sleep(300); odoStep(Date.now());
+    const turned = Math.abs(ODO.th - g0);
+    if (useGyro && gyroOk() && turned > 60) {
+      const fixed = Math.max(800, Math.min(10000, Math.round((spin * 360) / turned / 100) * 100));
+      $("ex-spin").value = fixed; $("ex-spin").dispatchEvent(new Event("change"));
+      exEvent(`test spin: the gyro measured ${Math.round(turned)}° — "Time for one 360°" set to ${fixed} ms`);
+    } else exEvent("test spin done — overshot? lower the time. Short? raise it.");
     $("ex-cal").disabled = false; $("ex-start").disabled = false;
   });
 
@@ -1750,6 +1769,8 @@ You control a real robot on a real desk. Rules:
   });
   try { $("vis-mirror").checked = localStorage.getItem("looi-vis-mirror") === "1"; } catch {}
   $("vis-mirror").addEventListener("change", () => { try { localStorage.setItem("looi-vis-mirror", $("vis-mirror").checked ? "1" : "0"); } catch {} applyPreviewRotation(); VIS.ref = null; });
+  try { const v = localStorage.getItem("looi-nav-autospeed"); if (v != null) $("nav-autospeed").checked = v === "1"; } catch {}
+  $("nav-autospeed").addEventListener("change", () => { try { localStorage.setItem("looi-nav-autospeed", $("nav-autospeed").checked ? "1" : "0"); } catch {} });
   applyPreviewRotation();
 
   function analyseFrame() {
@@ -2041,26 +2062,109 @@ You control a real robot on a real desk. Rules:
   //   No wheel encoders, so position is dead-reckoned from every drive command sent to FED0:
   //   speed from "mm/s at speed 100", turning from the 360° calibration. It drifts; Reset position fixes it.
   // ===================================================================
-  const ODO = { x: 0, y: 0, th: 0, f: 0, t: 0, at: 0, rec: true, path: [], pts: [], home: null };
+  const ODO = { x: 0, y: 0, th: 0, f: 0, t: 0, at: 0, cmdAt: 0, gAcc: 0, rec: true, path: [], pts: [], home: null };
+
+  // ---- Gyro heading ----
+  //   The phone rides on LOOI, so its gyroscope measures how LOOI actually turns. Rotation is projected onto the
+  //   gravity direction, which works however the phone is mounted and whatever the head tilt is. The bias is
+  //   re-learned whenever LOOI is parked, and the sign is checked against the turn commands in case a mount flips it.
+  //   Falls back to commanded turns (the 360° calibration) when there is no gyro.
+  const GYRO = { acc: 0, rate: 0, bias: 0, g: null, sign: 1, votes: 0, last: 0, n: 0, use: true };
+  const gyroOk = () => GYRO.use && GYRO.g && GYRO.n > 30 && performance.now() - GYRO.last < 300;
+  function onMotion(e) {
+    const r = e.rotationRate, a = e.accelerationIncludingGravity;
+    if (!r || r.alpha == null || !a || a.x == null) return;
+    const now = performance.now();
+    const g = GYRO.g || (GYRO.g = [a.x, a.y, a.z]);
+    g[0] += 0.05 * (a.x - g[0]); g[1] += 0.05 * (a.y - g[1]); g[2] += 0.05 * (a.z - g[2]);
+    const n = Math.hypot(g[0], g[1], g[2]);
+    const dt = GYRO.last ? Math.min(0.1, (now - GYRO.last) / 1000) : 0;
+    GYRO.last = now; GYRO.n++;
+    if (n < 5) return; // picked up or shaken: no trustworthy "up"
+    const yaw = (r.beta * g[0] + r.gamma * g[1] + r.alpha * g[2]) / n; // °/s about up; positive = left, like FED0
+    const parked = !ODO.f && !ODO.t && Date.now() - ODO.cmdAt > 600;
+    if (parked && Math.abs(yaw - GYRO.bias) < 4) GYRO.bias += 0.02 * (yaw - GYRO.bias);
+    const w = yaw - GYRO.bias;
+    if (ODO.t && !ODO.f && Math.abs(w) > 20) {
+      GYRO.votes = Math.max(-200, Math.min(200, GYRO.votes + Math.sign(ODO.t) * Math.sign(w)));
+      if (Math.abs(GYRO.votes) > 40) GYRO.sign = Math.sign(GYRO.votes);
+    }
+    GYRO.rate = GYRO.sign * w;
+    if (parked && Math.abs(w) < 1.5) return; // dead band while parked, so the heading doesn't creep
+    GYRO.acc += GYRO.rate * dt;
+  }
+  function gyroStart() {
+    if (GYRO.started || typeof DeviceMotionEvent === "undefined") return;
+    const go = () => { GYRO.started = true; window.addEventListener("devicemotion", onMotion); };
+    if (typeof DeviceMotionEvent.requestPermission === "function") DeviceMotionEvent.requestPermission().then((p) => p === "granted" && go()).catch(() => {});
+    else go();
+  }
+  gyroStart();
+  document.addEventListener("pointerdown", gyroStart, { once: true }); // iOS only asks after a tap
+
   function odoStep(now) {
-    if (!ODO.at) { ODO.at = now; return; }
-    const dt = Math.min(150, now - ODO.at); // the motors stop ~150 ms after the last command
+    if (!ODO.at) { ODO.at = now; ODO.gAcc = GYRO.acc; return; }
+    // The motors stop ~150 ms after the last command, so only that window counts as moving.
+    const dt = Math.max(0, Math.min(now, ODO.cmdAt + 150) - ODO.at);
     ODO.at = now;
-    if (!dt || (!ODO.f && !ODO.t)) return;
-    ODO.th += ODO.t * degPerUnitMs() * dt;
+    if (gyroOk()) ODO.th += GYRO.acc - ODO.gAcc;
+    else if (dt && ODO.t) ODO.th += ODO.t * degPerUnitMs() * dt;
+    ODO.gAcc = GYRO.acc;
+    if (!dt || !ODO.f) return;
     const r = (ODO.th * Math.PI) / 180, v = (ODO.f / 100) * (Number($("nav-speed").value) || 200);
     ODO.x += (Math.cos(r) * v * dt) / 1000;
     ODO.y += (Math.sin(r) * v * dt) / 1000;
   }
   function odoCommand(bytes) {
-    odoStep(Date.now());
+    const now = Date.now();
+    odoStep(now);
     ODO.f = bytes[0] > 127 ? bytes[0] - 256 : bytes[0];
     ODO.t = bytes[1] > 127 ? bytes[1] - 256 : bytes[1];
+    ODO.cmdAt = now;
   }
+
+  // ---- Speed learning from the distance sensor ----
+  //   Driving straight at something, the ToF reading shrinks at LOOI's real speed. Each clean straight run gives one
+  //   estimate of "mm/s at speed 100"; after a few agree, the setting moves a quarter of the way toward them.
+  const SPD = { run: [], est: [], learned: 0 };
+  function spdSample(now) {
+    const fresh = now - (S.distAt || 0) < 250, d = S.dist;
+    const straight = ODO.f >= 30 && ODO.t === 0 && now - ODO.cmdAt < 150 && (!gyroOk() || Math.abs(GYRO.rate) < 8);
+    const usable = fresh && d != null && d !== 0xffff && d > 150 && d < 800;
+    const run = SPD.run;
+    if (!straight || !usable || (run.length && run[0][2] !== ODO.f)) { spdClose(); if (straight && usable) run.push([now, d, ODO.f]); return; }
+    if (!run.length || now - run[run.length - 1][0] >= 80) run.push([now, d, ODO.f]);
+  }
+  function spdClose() {
+    const run = SPD.run.splice(0);
+    if (run.length < 6 || run[run.length - 1][0] - run[0][0] < 700) return;
+    const n = run.length, mt = run.reduce((s, p) => s + p[0], 0) / n, md = run.reduce((s, p) => s + p[1], 0) / n;
+    let sxy = 0, sxx = 0, res = 0;
+    for (const p of run) { sxy += (p[0] - mt) * (p[1] - md); sxx += (p[0] - mt) ** 2; }
+    const slope = sxy / sxx; // mm per ms (negative when closing in)
+    for (const p of run) res += (p[1] - (md + slope * (p[0] - mt))) ** 2;
+    const drop = run[0][1] - run[n - 1][1], rms = Math.sqrt(res / n);
+    if (slope >= 0 || drop < 60 || rms > 25) return; // not a clean approach: target moving, echo, or a turn
+    const v100 = (-slope * 1000 * 100) / run[0][2];
+    if (v100 < 30 || v100 > 1000) return;
+    SPD.est.push(v100); if (SPD.est.length > 5) SPD.est.shift();
+    if (SPD.est.length < 3) return;
+    const sorted = SPD.est.slice().sort((a, b) => a - b), med = sorted[1 + (sorted.length > 3 ? 1 : 0)];
+    if (sorted[sorted.length - 1] / sorted[0] > 1.4) return; // estimates disagree: wait for more
+    SPD.learned = Math.round(med);
+    if (!$("nav-autospeed").checked) return;
+    const cur = Number($("nav-speed").value) || 200, next = Math.round(cur + 0.25 * (med - cur));
+    if (Math.abs(next - cur) < 3) return;
+    $("nav-speed").value = next;
+    try { localStorage.setItem("looi-nav-speed", String(next)); } catch {}
+    log("sys", `Speed learned from the distance sensor: ~${SPD.learned} mm/s at speed 100 (setting now ${next}).`);
+  }
+  setInterval(() => spdSample(Date.now()), 80);
   let lastCamPts = 0;
   setInterval(() => {
     const now = Date.now();
     odoStep(now);
+    spdSample(now);
     if (!device?.gatt?.connected) return;
     // Path: last 5 minutes, a point every 200 ms when LOOI has moved.
     if (ODO.rec) {
@@ -2088,7 +2192,7 @@ You control a real robot on a real desk. Rules:
 
   function navStatus() {
     const h = ODO.home ? Math.hypot(ODO.home.x - ODO.x, ODO.home.y - ODO.y) : null;
-    $("nav-pos").textContent = `x ${Math.round(ODO.x)} mm · y ${Math.round(ODO.y)} mm · heading ${Math.round(((ODO.th % 360) + 360) % 360)}°`;
+    $("nav-pos").textContent = `x ${Math.round(ODO.x)} mm · y ${Math.round(ODO.y)} mm · heading ${Math.round(((ODO.th % 360) + 360) % 360)}° (${gyroOk() ? "gyro" : "estimated"})${SPD.learned ? ` · speed ~${SPD.learned} mm/s` : ""}`;
     $("nav-home").textContent = ODO.home ? `set · ${Math.round(h)} mm away` : "not set";
     $("nav-rec").textContent = ODO.rec ? `recording · ${ODO.path.length} points` : "paused";
     $("nav-cal").textContent = rangeReady() ? `calibrated (${rangeSamples()} samples at this head tilt)` : `learning… ${rangeSamples()} samples`;
@@ -2122,7 +2226,7 @@ You control a real robot on a real desk. Rules:
   $("nav-speedtest").addEventListener("click", navSpeedTest);
   // Compact copies for the remote console (rounded, decimated).
   function navTelemetry(full) {
-    const out = { x: Math.round(ODO.x), y: Math.round(ODO.y), th: Math.round(ODO.th * 10) / 10, home: ODO.home && { x: Math.round(ODO.home.x), y: Math.round(ODO.home.y) }, rec: ODO.rec, cal: rangeReady(), samples: rangeSamples() };
+    const out = { x: Math.round(ODO.x), y: Math.round(ODO.y), th: Math.round(ODO.th * 10) / 10, home: ODO.home && { x: Math.round(ODO.home.x), y: Math.round(ODO.home.y) }, rec: ODO.rec, gyro: gyroOk(), spd: SPD.learned, cal: rangeReady(), samples: rangeSamples() };
     if (full) {
       const step = Math.max(1, Math.ceil(ODO.path.length / 400));
       out.path = ODO.path.filter((_, i) => i % step === 0 || i === ODO.path.length - 1).map((p) => [Math.round(p[0]), Math.round(p[1])]);
@@ -2191,7 +2295,7 @@ You control a real robot on a real desk. Rules:
   // ===================================================================
   var REM = { peer: null, conn: null, call: null, code: null, sess: null, lastRx: 0, media: {}, vec: { f: 0, t: 0 }, lastDrive: 0, driveTimer: null, telTimer: null, latch: false };
   const REMOTE_SETTINGS = ["ex-cruise", "ex-turn", "ex-stopdist", "ex-spin", "ex-dark", "ex-bright", "ex-mins", "ex-lights", "ex-tilt", "ex-react", "ex-peek",
-    "vis-block", "vis-tol", "vis-fov", "vis-rot", "vis-mirror", "nav-speed", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
+    "vis-block", "vis-tol", "vis-fov", "vis-rot", "vis-mirror", "nav-speed", "nav-autospeed", "vis-steer", "vis-ai", "ai-model", "ai-maxspeed", "ai-mindist", "ai-speak", "face-mode-style"];
   function remCode(fresh) {
     const alpha = "abcdefghjkmnpqrstuvwxyz23456789";
     const make = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => alpha[b % alpha.length]).join("");
@@ -2206,74 +2310,12 @@ You control a real robot on a real desk. Rules:
     if (!q.get("peerhost")) return { debug: 1 };
     return { host: q.get("peerhost"), port: Number(q.get("peerport") || 443), path: q.get("peerpath") || "/", secure: q.get("peersecure") !== "0", debug: 1 };
   }
-  // ---- Link security (shared by the phone and the PC; keep both copies identical) ----
+  // ---- Link security (shared by the phone and the PC) ----
   //   The repo is public, so nothing here is secret except the password. The phone holds a key derived from it
   //   (PBKDF2-SHA256, 600k rounds, random salt). A PC must prove it knows the key (HMAC challenge-response with fresh
   //   nonces from both sides) before the phone shares anything or accepts any command. The phone then proves itself
   //   back, and every message after that is AES-GCM encrypted with a per-link key, numbered so replays are rejected.
-  const SEC = (() => {
-    const te = new TextEncoder(), td = new TextDecoder();
-    const b64 = (u8) => { let s = ""; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
-    const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-    const rand = (n) => crypto.getRandomValues(new Uint8Array(n));
-    const ITER = 600000;
-    async function derive(pass, salt, iter = ITER) {
-      const base = await crypto.subtle.importKey("raw", te.encode(pass.normalize("NFKC")), "PBKDF2", false, ["deriveBits"]);
-      return new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: iter }, base, 256));
-    }
-    async function mac(key, label) {
-      const k = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-      return new Uint8Array(await crypto.subtle.sign("HMAC", k, te.encode(label)));
-    }
-    function same(a, b) { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i]; return d === 0; }
-    // dir: 0 = phone sends, 1 = PC sends. Messages are { e: ciphertext, n: counter }; the counter is part of the IV.
-    async function session(key, transcript, dir) {
-      const aes = await crypto.subtle.importKey("raw", await mac(key, "looi-session|" + transcript), "AES-GCM", false, ["encrypt", "decrypt"]);
-      const iv = (d, n) => { const v = new Uint8Array(12); v[0] = d; new DataView(v.buffer).setUint32(4, Math.floor(n / 2 ** 32)); new DataView(v.buffer).setUint32(8, n >>> 0); return v; };
-      let sendN = 0, recvN = 0, sendQ = Promise.resolve(), recvQ = Promise.resolve();
-      return {
-        seal(obj) {
-          const n = ++sendN;
-          return (sendQ = sendQ.catch(() => {}).then(async () => ({ e: b64(new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv(dir, n) }, aes, te.encode(JSON.stringify(obj))))), n })));
-        },
-        open(m) {
-          return (recvQ = recvQ.catch(() => {}).then(async () => {
-            if (!m || typeof m.e !== "string" || !Number.isSafeInteger(m.n) || m.n <= recvN) throw new Error("unexpected or replayed message");
-            const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv(dir ^ 1, m.n) }, aes, unb64(m.e));
-            recvN = m.n;
-            return JSON.parse(td.decode(pt));
-          }));
-        },
-      };
-    }
-    // Media calls (video, audio) carry their own DTLS keys, exchanged through the signal server. Each side reports the
-    // certificate fingerprints it sees over the encrypted channel; if a relay swapped in its own keys they won't match.
-    const fpOf = (sdp) => (String(sdp || "").match(/^a=fingerprint:.*$/gm) || []).map((l) => l.trim().toLowerCase()).sort().join(",");
-    function watchMedia(call, report, onBad) {
-      const st = { mine: null, theirs: null, ok: false, done: false };
-      let tries = 0;
-      const poll = setInterval(() => {
-        const pc = call.peerConnection;
-        if (++tries > 75 || st.done) return clearInterval(poll);
-        if (!pc?.localDescription?.sdp || !pc?.remoteDescription?.sdp) return;
-        clearInterval(poll);
-        st.mine = { local: fpOf(pc.localDescription.sdp), remote: fpOf(pc.remoteDescription.sdp) };
-        report({ t: "media-fp", id: call.connectionId, local: st.mine.local, remote: st.mine.remote });
-        st.check();
-      }, 200);
-      st.check = () => {
-        if (st.done || !st.mine || !st.theirs) return;
-        st.done = true;
-        st.ok = !!st.mine.local && st.mine.local === st.theirs.remote && st.mine.remote === st.theirs.local;
-        if (!st.ok) onBad("its encryption keys don't match on both ends");
-      };
-      st.theirsIn = (m) => { st.theirs = { local: String(m.local), remote: String(m.remote) }; st.check(); };
-      const timer = setTimeout(() => { if (!st.done) { st.done = true; onBad("it couldn't be verified in time"); } }, 15000);
-      call.on("close", () => { st.done = true; clearInterval(poll); clearTimeout(timer); });
-      return st;
-    }
-    return { b64, unb64, rand, derive, mac, same, session, ITER, fpOf, watchMedia };
-  })();
+  // Shared crypto (SEC) lives in sec.js, loaded before this script by both pages.
 
   // Phone side of the login. Stored: { salt, iter, key } (the derived key, never the password) plus the lockout state.
   const AUTH_KEY = "looi-remote-auth", LOCK_KEY = "looi-remote-lock";

@@ -15,7 +15,7 @@ A single-page controller for the TangibleFuture LOOI desk robot. It talks straig
 - **AI pilot**: an OpenAI model with tool calls, gated by a safety layer, and it can see through the camera
 - **Eyes**: rear-camera free-floor detection that steers Explore (it only triggers avoidance within the *Camera reacts within* distance, 300 mm by default), a head-tilt "second look" when camera and distance disagree, and a full-screen face for the Flip's cover screen
 - **Sensor fusion**: the camera learns to judge distance from the distance sensor (per head tilt), giving each of 9 columns a distance estimate; the distance sensor overrides the centre and the close-range sensor confirms contact
-- **Map & home**: dead-reckoned position from every drive command, a live radar with obstacle points, the last 5 minutes of path, Set home / Go home
+- **Map & home**: heading from the phone's gyroscope (falls back to commanded turns), distance from drive commands with speed self-tuned by the distance sensor, a live radar with obstacle points, the last 5 minutes of path, Set home / Go home
 - **Robo eyes face** (in the style of [FluxGarage RoboEyes](https://github.com/FluxGarage/RoboEyes)): rounded glowing eyes with eyelid moods, blinks, glances and colours that glide between moods. Lime and focused while hunting, red and curious with a "?" when blocked, yellow happy cheeks when it finds a way out, trembling with sweat drops at edges, purple when the AI is thinking, tired teal on low battery
 - **Audio & light**: listen to the phone's microphone, talk through its speaker (hold to talk), make it say things or play sounds, toggle the flashlight
 - **Remote console**: live camera with vision overlay, telemetry, joystick, Explore, AI chat and settings from a PC browser. Rotate or mirror the video and switch between the phone's cameras. The header shows the robot's and the phone's battery. Remote driving keeps a 300 ms deadman (if the PC goes quiet, it stops). The forward block and edge stop can be switched off with **Safety off** on the PC; they come back on when the PC disconnects
@@ -38,8 +38,8 @@ WebRTC between the phone and the PC via [PeerJS](https://peerjs.com). The free P
 To use your own signalling server, add `?peerhost=HOST&peerport=PORT&peersecure=0|1` to both URLs.
 
 ### Calibration (do once, in this order)
-1. **360° time**: Test 360° spin, adjust until LOOI ends where it started.
-2. **Speed**: Speed test (1 s at speed 100), measure the distance in mm, enter it as *mm/s at speed 100*.
+1. **360° time**: press Test 360° spin. With a gyro, the time is set for you from the measured turn; without one, adjust until LOOI ends where it started.
+2. **Speed**: learns itself when LOOI drives straight at something within ~80 cm (*Learn speed from the distance sensor*). To set it by hand: Speed test (1 s at speed 100), measure the distance in mm, enter it as *mm/s at speed 100*.
 3. **Camera rotation**: rotate the view on the PC until it's upright. The phone uses the same setting to analyse the image.
 4. **Camera ranging** learns by itself while driving toward things the distance sensor can see.
 
@@ -54,6 +54,7 @@ The repository and the pages are public, so the only secret is the password, and
 - **Video and audio** only start for the logged-in PC, and the PC only accepts video from the phone it logged in to. Each media call has its own WebRTC encryption keys, set up through the PeerJS signal server. Both ends then compare those keys' fingerprints over the password-protected link and hang up if they differ, so a relay that swaps in its own keys gets cut off.
 - **Disconnects.** The PC says goodbye when you press Disconnect or close the tab, and pings every 1.5 s. If the phone hears nothing for 6 s it frees the slot, so a crashed PC can't lock you out.
 - **Remembered key and a changed password.** If the phone's password changes, a PC with a remembered key won't log in on its own; you type the new password once.
+- The crypto lives in one file, `sec.js`, loaded by both pages, so the phone and the PC always run the same code.
 - The 6-letter code is only an address; it isn't the secret. Changing the password ends any current PC link.
 
 ## Protocol (service `0x00FF`)
